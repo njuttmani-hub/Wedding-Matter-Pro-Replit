@@ -16,10 +16,13 @@ export interface Palette {
 
 export interface PersonInfo {
   name: string;
-  salutation: string;
+  namePrefix: string;          // e.g. "Kumari", "Shri" — user writes freely
   fatherName: string;
+  fatherPrefix: string;        // e.g. "Shri", "Late Shri"
   motherName: string;
+  motherPrefix: string;        // e.g. "Smt.", "Late Smt."
   grandparents: string;
+  grandparentsPrefix: string;  // e.g. "Late Shri & Smt."
 }
 
 export interface Programme {
@@ -36,6 +39,7 @@ export interface Programme {
 export interface FormState {
   bride: PersonInfo;
   groom: PersonInfo;
+  brideFirst: boolean;          // true = bride on top, false = groom on top
   family: {
     surname: string;
     title: string;
@@ -69,4 +73,7 @@ export interface FormState {
 export interface SubmittedOrder {
   orderId: string;
   at: string;
+  couple: string;
+  form: FormState;
+  status: 'New' | 'In Progress' | 'Completed';
 }

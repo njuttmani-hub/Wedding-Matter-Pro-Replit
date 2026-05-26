@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Sparkles, ChevronRight, ChevronLeft, Check, Plus, Trash2,
@@ -6,15 +6,19 @@ import {
   Sun, Moon, LayoutDashboard, Clock, CheckCircle2, Edit3, X,
   Smartphone, Monitor, Printer, ArrowUp, ArrowDown, User, Package,
   Bell, Palette as PaletteIcon, Crown, Flame, Gem, Star, BookOpen,
-  MessageCircle, Zap, Info
+  MessageCircle, Zap, Info, ArrowLeftRight, CloudOff, Save
 } from 'lucide-react';
 import type { Palette, FormState, PersonInfo, Programme, SubmittedOrder } from './types';
 import {
   INVITATION_TEMPLATES, DEITIES, RELATION_WORDS, CLOSING_TAGS, KIDS_LINES,
-  PROGRAMME_PRESETS, FONTS, SAMPLE_ORDERS
+  PROGRAMME_PRESETS, FONTS
 } from './data/constants';
 
-/* ─── Colour palette ────────────────────────────────────────────────────── */
+/* ─── Storage keys ───────────────────────────────────────────────────────── */
+const DRAFT_KEY = 'wmp_draft_v2';
+const ORDERS_KEY = 'wmp_orders_v2';
+
+/* ─── Colour palette ─────────────────────────────────────────────────────── */
 const palette: { light: Palette; dark: Palette } = {
   light: {
     bg1: '#FBF5E6', bg2: '#F4E4C0',
@@ -36,7 +40,7 @@ const palette: { light: Palette; dark: Palette } = {
   }
 };
 
-/* ─── Constants ─────────────────────────────────────────────────────────── */
+/* ─── Constants ──────────────────────────────────────────────────────────── */
 const LAYOUTS = [
   { id: 'royal', name: 'Royal', desc: 'Ornate borders, grand fonts', icon: Crown },
   { id: 'traditional', name: 'Traditional', desc: 'Classic Indian aesthetic', icon: Flame },
@@ -44,26 +48,34 @@ const LAYOUTS = [
 ];
 
 const STEPS = [
-  { id: 0, label: 'Family', short: 'Family', icon: User, tip: 'Enter the bride & groom names exactly as they should appear on the card.' },
-  { id: 1, label: 'Deities', short: 'Deities', icon: Star, tip: 'Tap any deity to add them to the top row of your card. Most families pick 4–8.' },
-  { id: 2, label: 'Invitation Text', short: 'Text', icon: BookOpen, tip: 'Pick the invitation paragraph that sounds best to you — no typing needed!' },
-  { id: 3, label: 'Programmes', short: 'Events', icon: Calendar, tip: 'Add all your functions — wedding, mehendi, haldi, reception, etc.' },
-  { id: 4, label: 'Extras', short: 'Extras', icon: FileText, tip: 'Pick a closing line, kids message, and sponsors if applicable.' },
-  { id: 5, label: 'Typography', short: 'Type', icon: Type, tip: 'Choose fonts and text sizing for your card design.' },
-  { id: 6, label: 'Preview', short: 'View', icon: Eye, tip: 'See exactly how your card will look before sending to the designer.' },
-  { id: 7, label: 'Submit', short: 'Send', icon: Send, tip: 'Review all details carefully, then submit to the designer.' },
+  { id: 0, label: 'Family', short: 'Family', icon: User, tip: 'Enter names exactly as they should appear on the card. Add any prefix (Shri, Smt., etc.) in the small box before each name.' },
+  { id: 1, label: 'Deities', short: 'Deities', icon: Star, tip: 'Tap a deity to add it to the top row. Numbers show the order they will appear.' },
+  { id: 2, label: 'Invitation Text', short: 'Text', icon: BookOpen, tip: 'Pick the invitation paragraph — no typing needed! 22 ready options.' },
+  { id: 3, label: 'Programmes', short: 'Events', icon: Calendar, tip: 'Add all wedding functions. The date field is required for each.' },
+  { id: 4, label: 'Extras', short: 'Extras', icon: FileText, tip: 'Closing line, kids message, and with-best-compliments section.' },
+  { id: 5, label: 'Typography', short: 'Type', icon: Type, tip: 'Choose fonts and layout style for your card design.' },
+  { id: 6, label: 'Preview', short: 'View', icon: Eye, tip: 'See exactly how the card will look. Check all names and dates carefully.' },
+  { id: 7, label: 'Submit', short: 'Send', icon: Send, tip: 'Tick the confirmation box and submit — the designer will receive it instantly.' },
 ];
 
 const VALIDATION_HINTS: Record<number, string> = {
-  0: 'Please enter both the bride\'s name and the groom\'s name to continue.',
+  0: "Please enter both the bride's name and the groom's name to continue.",
   1: 'Please select at least one deity for the top of your card.',
   2: 'Please pick an invitation template to continue.',
   3: 'Please add at least one programme with a date to continue.',
 };
 
+const emptyPerson = (namePrefix = ''): PersonInfo => ({
+  name: '', namePrefix,
+  fatherName: '', fatherPrefix: '',
+  motherName: '', motherPrefix: '',
+  grandparents: '', grandparentsPrefix: '',
+});
+
 const initialForm: FormState = {
-  bride: { name: '', salutation: 'Ms.', fatherName: '', motherName: '', grandparents: '' },
-  groom: { name: '', salutation: 'Mr.', fatherName: '', motherName: '', grandparents: '' },
+  bride: emptyPerson(),
+  groom: emptyPerson(),
+  brideFirst: true,
   family: { surname: '', title: '', nativePlace: '', residenceAddress: '' },
   hostType: 'parents',
   childRelation: 'son',
@@ -91,14 +103,23 @@ const initialForm: FormState = {
   meta: { accepted: false }
 };
 
-const sampleForm: Partial<FormState> = {
-  bride: { name: 'Aditi Sharma', salutation: 'Ms.', fatherName: 'Shri Rajesh Sharma', motherName: 'Smt. Sunita Sharma', grandparents: 'Late Shri Ram Prasad Sharma' },
-  groom: { name: 'Rohan Mehta', salutation: 'Mr.', fatherName: 'Shri Mahesh Mehta', motherName: 'Smt. Kavita Mehta', grandparents: 'Late Shri Govind Mehta' },
+const sampleForm: FormState = {
+  ...initialForm,
+  bride: {
+    name: 'Aditi Sharma', namePrefix: 'Kumari',
+    fatherName: 'Rajesh Sharma', fatherPrefix: 'Shri',
+    motherName: 'Sunita Sharma', motherPrefix: 'Smt.',
+    grandparents: 'Ram Prasad Sharma', grandparentsPrefix: 'Late Shri',
+  },
+  groom: {
+    name: 'Rohan Mehta', namePrefix: '',
+    fatherName: 'Mahesh Mehta', fatherPrefix: 'Shri',
+    motherName: 'Kavita Mehta', motherPrefix: 'Smt.',
+    grandparents: 'Govind Mehta', grandparentsPrefix: 'Late Shri',
+  },
+  brideFirst: true,
   family: { surname: 'Sharma', title: 'Parivaar', nativePlace: 'Jaipur, Rajasthan', residenceAddress: '12-B, Rose Garden, Sector 5, Jaipur - 302001' },
   deities: ['ganesh', 'shiva', 'lakshmi', 'om', 'krishna'],
-  selectedTemplate: 4,
-  relationWord: 'weds',
-  closingTag: 'k',
   programmes: [
     { id: 1, preset: 'mehendi', name: 'Mehendi Party', date: '2026-12-13', time: '16:00', venue: 'Sharma Residence', address: '12-B Rose Garden, Jaipur', notes: '' },
     { id: 2, preset: 'haldi', name: 'Haldi Ceremony', date: '2026-12-14', time: '10:00', venue: 'Sharma Residence', address: '12-B Rose Garden, Jaipur', notes: '' },
@@ -108,7 +129,14 @@ const sampleForm: Partial<FormState> = {
   withCompliments: 'Sharma & Mehta Families',
 };
 
-/* ─── Helpers ───────────────────────────────────────────────────────────── */
+/* ─── Helpers ────────────────────────────────────────────────────────────── */
+function pn(prefix: string, name: string) {
+  const p = prefix.trim();
+  const n = name.trim();
+  if (!n) return '';
+  return p ? `${p} ${n}` : n;
+}
+
 function fillTemplate(text: string, form: FormState): string {
   const relation = RELATION_WORDS.find(r => r.id === form.relationWord);
   const childName = `${form.bride.name || '___'} ${relation ? relation.label : 'Weds'} ${form.groom.name || '___'}`;
@@ -129,14 +157,29 @@ function generateCorelText(form: FormState): string {
   const deityNames = form.deities.map(id => DEITIES.find(d => d.id === id)?.name).join(' · ');
   const deityGlyphs = form.deities.map(id => DEITIES.find(d => d.id === id)?.glyph).join(' ');
 
+  const personBlock = (label: string, p: PersonInfo) => {
+    let s = `─── ${label} ───\n`;
+    s += `${pn(p.namePrefix, p.name)}\n`;
+    if (p.fatherName) s += `${pn(p.fatherPrefix, p.fatherName)}\n`;
+    if (p.motherName) s += `${pn(p.motherPrefix, p.motherName)}\n`;
+    if (p.grandparents) s += `${pn(p.grandparentsPrefix, p.grandparents)}\n`;
+    return s + '\n';
+  };
+
+  const first = form.brideFirst ? form.bride : form.groom;
+  const second = form.brideFirst ? form.groom : form.bride;
+  const firstLabel = form.brideFirst ? 'BRIDE (FIRST ON CARD)' : 'GROOM (FIRST ON CARD)';
+  const secondLabel = form.brideFirst ? 'GROOM (SECOND)' : 'BRIDE (SECOND)';
+
   let s = '';
   s += `╔══════════════════════════════════╗\n║   WEDDING CARD MATTER EXPORT     ║\n╚══════════════════════════════════╝\n\n`;
+  s += `─── CARD ORDER ───\n${form.brideFirst ? 'Bride first, Groom second' : 'Groom first, Bride second'}\n\n`;
   s += `─── DEITIES (TOP ROW) ───\n${deityGlyphs}\n${deityNames}\nPrimary Mantra: ${DEITIES.find(d => d.id === form.deities[0])?.mantra || '—'}\n\n`;
   s += `─── DESIGN ───\nLanguage: ${form.design.language} | Layout: ${form.design.layout.toUpperCase()}\nHeading: ${form.design.headingFont}\nBody: ${form.design.bodyFont}\nScript: ${form.design.scriptFont}\nSize ${form.design.fontSize}px / Spacing ${form.design.letterSpacing}px / Leading ${form.design.lineHeight}\n\n`;
   s += `─── INVITATION TEMPLATE #${template?.id} (${template?.category}) ───\n${fillTemplate(template?.text || '', form)}\n\n`;
-  s += `─── BRIDE ───\n${form.bride.salutation} ${form.bride.name}\nD/o ${form.bride.fatherName} & ${form.bride.motherName}\n${form.bride.grandparents ? `G/o ${form.bride.grandparents}\n` : ''}\n`;
+  s += personBlock(firstLabel, first);
   s += `─── RELATION ───\n${relation?.label || 'Weds'}\n\n`;
-  s += `─── GROOM ───\n${form.groom.salutation} ${form.groom.name}\nS/o ${form.groom.fatherName} & ${form.groom.motherName}\n${form.groom.grandparents ? `G/o ${form.groom.grandparents}\n` : ''}\n`;
+  s += personBlock(secondLabel, second);
   s += `─── PROGRAMMES ───\n`;
   form.programmes.forEach((f, i) => {
     s += `\n[${i + 1}] ${f.name}\n  Date: ${f.date}${f.time ? ` | Time: ${f.time}` : ''}\n`;
@@ -150,18 +193,50 @@ function generateCorelText(form: FormState): string {
   return s;
 }
 
-/* ─── Root App ──────────────────────────────────────────────────────────── */
+function loadDraft(): FormState {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as FormState;
+      // Merge with initialForm to handle new fields added in updates
+      return { ...initialForm, ...parsed, meta: { accepted: false } };
+    }
+  } catch { /* ignore */ }
+  return initialForm;
+}
+
+function loadOrders(): SubmittedOrder[] {
+  try {
+    const raw = localStorage.getItem(ORDERS_KEY);
+    if (raw) return JSON.parse(raw) as SubmittedOrder[];
+  } catch { /* ignore */ }
+  return [];
+}
+
+function saveOrders(orders: SubmittedOrder[]) {
+  try { localStorage.setItem(ORDERS_KEY, JSON.stringify(orders)); } catch { /* ignore */ }
+}
+
+/* ─── Root App ───────────────────────────────────────────────────────────── */
 export default function WeddingApp() {
   const [mode, setMode] = useState<'customer' | 'admin'>('customer');
   const [dark, setDark] = useState(false);
+  const [orders, setOrders] = useState<SubmittedOrder[]>(() => loadOrders());
   const c = dark ? palette.dark : palette.light;
+
+  const addOrder = useCallback((order: SubmittedOrder) => {
+    setOrders(prev => {
+      const next = [order, ...prev];
+      saveOrders(next);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     const id = 'wmp-fonts-v3';
     if (document.getElementById(id)) return;
     const link = document.createElement('link');
-    link.id = id;
-    link.rel = 'stylesheet';
+    link.id = id; link.rel = 'stylesheet';
     link.href = 'https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Cormorant+Infant:wght@400;600&family=Playfair+Display:wght@400;700;900&family=Cinzel:wght@400;700;900&family=Cinzel+Decorative:wght@400;700;900&family=EB+Garamond:ital,wght@0,400;0,600;1,400&family=Marcellus&family=Tangerine:wght@400;700&family=Great+Vibes&family=Italianno&family=Pinyon+Script&family=Allura&family=Tiro+Devanagari+Hindi&family=Noto+Serif+Devanagari:wght@400;700&family=Rozha+One&family=Yatra+One&family=Sahitya:wght@400;700&family=Modak&family=Noto+Serif+Gujarati:wght@400;700&family=Rasa:wght@400;600&family=Hind+Vadodara:wght@400;600&display=swap';
     document.head.appendChild(link);
   }, []);
@@ -169,16 +244,16 @@ export default function WeddingApp() {
   return (
     <div className="min-h-screen relative transition-colors duration-700" style={{ background: c.bg1, color: c.text, fontFamily: "'EB Garamond', serif" }}>
       <Atmosphere c={c} />
-      <Nav mode={mode} setMode={setMode} dark={dark} setDark={setDark} c={c} />
+      <Nav mode={mode} setMode={setMode} dark={dark} setDark={setDark} c={c} orderCount={orders.filter(o => o.status === 'New').length} />
       <main className="relative z-10 max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 pb-32 pt-6">
         <AnimatePresence mode="wait">
           {mode === 'customer' ? (
             <motion.div key="c" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35 }}>
-              <CustomerFlow c={c} dark={dark} />
+              <CustomerFlow c={c} dark={dark} addOrder={addOrder} />
             </motion.div>
           ) : (
             <motion.div key="a" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35 }}>
-              <AdminDashboard c={c} dark={dark} />
+              <AdminDashboard c={c} dark={dark} orders={orders} setOrders={o => { setOrders(o); saveOrders(o); }} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -187,7 +262,7 @@ export default function WeddingApp() {
   );
 }
 
-/* ─── Atmosphere background ─────────────────────────────────────────────── */
+/* ─── Atmosphere ─────────────────────────────────────────────────────────── */
 function Atmosphere({ c }: { c: Palette }) {
   return (
     <div className="fixed inset-0 overflow-hidden pointer-events-none z-0">
@@ -209,12 +284,12 @@ function Atmosphere({ c }: { c: Palette }) {
 }
 
 /* ─── Navigation ─────────────────────────────────────────────────────────── */
-function Nav({ mode, setMode, dark, setDark, c }: {
+function Nav({ mode, setMode, dark, setDark, c, orderCount }: {
   mode: string; setMode: (m: 'customer' | 'admin') => void;
-  dark: boolean; setDark: (d: boolean) => void; c: Palette;
+  dark: boolean; setDark: (d: boolean) => void; c: Palette; orderCount: number;
 }) {
   return (
-    <nav className="relative z-20 border-b" style={{ borderColor: c.border, background: `${c.surface}`, backdropFilter: 'blur(24px)' }}>
+    <nav className="relative z-20 border-b" style={{ borderColor: c.border, background: c.surface, backdropFilter: 'blur(24px)' }}>
       <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-full flex items-center justify-center shadow-lg" style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}>
@@ -233,9 +308,14 @@ function Nav({ mode, setMode, dark, setDark, c }: {
               Customer
             </button>
             <button onClick={() => setMode('admin')}
-              className="px-4 py-1.5 rounded-full text-[11px] font-bold transition-all flex items-center gap-1.5"
+              className="px-4 py-1.5 rounded-full text-[11px] font-bold transition-all flex items-center gap-1.5 relative"
               style={{ background: mode === 'admin' ? `linear-gradient(135deg, ${c.primary}, ${c.gold})` : 'transparent', color: mode === 'admin' ? 'white' : c.subtext }}>
               <LayoutDashboard className="w-3 h-3" /> Admin
+              {orderCount > 0 && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[9px] font-bold text-white flex items-center justify-center" style={{ background: c.accent }}>
+                  {orderCount}
+                </span>
+              )}
             </button>
           </div>
           <button onClick={() => setDark(!dark)}
@@ -250,13 +330,33 @@ function Nav({ mode, setMode, dark, setDark, c }: {
 }
 
 /* ─── Customer Flow ──────────────────────────────────────────────────────── */
-function CustomerFlow({ c, dark }: { c: Palette; dark: boolean }) {
+function CustomerFlow({ c, dark, addOrder }: { c: Palette; dark: boolean; addOrder: (o: SubmittedOrder) => void }) {
   const [step, setStep] = useState(0);
-  const [form, setForm] = useState<FormState>(initialForm);
+  const [form, setForm] = useState<FormState>(() => loadDraft());
   const [submitted, setSubmitted] = useState<SubmittedOrder | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [previewExpanded, setPreviewExpanded] = useState(false);
+  const [offline, setOffline] = useState(!navigator.onLine);
+
+  // Online/offline detection
+  useEffect(() => {
+    const on = () => setOffline(false);
+    const off = () => setOffline(true);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+  }, []);
+
+  // Auto-save draft to localStorage on every form change
+  useEffect(() => {
+    setSaving(true);
+    const id = setTimeout(() => {
+      try { localStorage.setItem(DRAFT_KEY, JSON.stringify(form)); } catch { /* ignore */ }
+      setSaving(false);
+    }, 600);
+    return () => clearTimeout(id);
+  }, [form]);
 
   const update = (path: string, value: unknown) => {
     setForm(prev => {
@@ -270,16 +370,8 @@ function CustomerFlow({ c, dark }: { c: Palette; dark: boolean }) {
     });
   };
 
-  const fillSample = () => {
-    setForm(prev => ({ ...prev, ...sampleForm } as FormState));
-    showToast('Sample data loaded — feel free to edit!', 'success');
-  };
-
-  useEffect(() => {
-    setSaving(true);
-    const id = setTimeout(() => setSaving(false), 600);
-    return () => clearTimeout(id);
-  }, [form]);
+  const fillSample = () => { setForm(sampleForm); showToast('Sample card loaded — feel free to edit!'); };
+  const clearDraft = () => { setForm(initialForm); try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ } };
 
   const canNext = useMemo(() => {
     if (step === 0) return !!(form.bride.name.trim() && form.groom.name.trim());
@@ -291,7 +383,7 @@ function CustomerFlow({ c, dark }: { c: Palette; dark: boolean }) {
 
   const showToast = (msg: string, type = 'success') => {
     setToast({ msg, type });
-    setTimeout(() => setToast(null), 2600);
+    setTimeout(() => setToast(null), 2800);
   };
 
   const next = () => {
@@ -300,9 +392,20 @@ function CustomerFlow({ c, dark }: { c: Palette; dark: boolean }) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   const prev = () => { setStep(s => Math.max(0, s - 1)); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+
   const submit = () => {
     if (!form.meta.accepted) { showToast('Please tick the checkbox to confirm your details.', 'error'); return; }
-    setSubmitted({ orderId: `WMP-${Math.floor(2400 + Math.random() * 200)}`, at: new Date().toLocaleString() });
+    const order: SubmittedOrder = {
+      orderId: `WMP-${Math.floor(2400 + Math.random() * 800)}`,
+      at: new Date().toLocaleString(),
+      couple: `${form.bride.name}${form.groom.name ? ` & ${form.groom.name}` : ''}`,
+      form: JSON.parse(JSON.stringify(form)),
+      status: 'New',
+    };
+    addOrder(order);
+    setSubmitted(order);
+    // Clear draft after successful submit
+    try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
   };
 
   const coupleNames = form.bride.name && form.groom.name ? `${form.bride.name} & ${form.groom.name}` : null;
@@ -314,14 +417,14 @@ function CustomerFlow({ c, dark }: { c: Palette; dark: boolean }) {
 
   return (
     <div className="pt-4 sm:pt-6">
-      <Hero c={c} onFillSample={fillSample} />
-      <Stepper step={step} setStep={setStep} c={c} dark={dark} saving={saving} />
+      <Hero c={c} onFillSample={fillSample} onClear={clearDraft} hasDraft={JSON.stringify(form) !== JSON.stringify(initialForm)} />
+      <Stepper step={step} setStep={setStep} c={c} dark={dark} saving={saving} offline={offline} />
 
       <div className="grid lg:grid-cols-12 gap-6 mt-6">
         <div className="lg:col-span-7">
           <AnimatePresence mode="wait">
             <motion.div key={step} initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -16 }} transition={{ duration: 0.28 }}>
-              {step === 0 && <StepFamily form={form} update={update} c={c} />}
+              {step === 0 && <StepFamily form={form} update={update} setForm={setForm} c={c} />}
               {step === 1 && <StepDeities form={form} update={update} setForm={setForm} c={c} />}
               {step === 2 && <StepInvitation form={form} update={update} c={c} dark={dark} />}
               {step === 3 && <StepProgrammes form={form} setForm={setForm} c={c} dark={dark} />}
@@ -338,7 +441,7 @@ function CustomerFlow({ c, dark }: { c: Palette; dark: boolean }) {
           <div className="lg:sticky lg:top-24">
             <div className="rounded-3xl border shadow-2xl overflow-hidden" style={{ borderColor: c.border, background: c.surface, backdropFilter: 'blur(20px)' }}>
               <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: c.border }}>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: c.gold }} />
                   <span className="text-[10px] font-bold uppercase tracking-[0.25em]" style={{ color: c.gold }}>Live Preview</span>
                   {coupleNames && (
@@ -368,19 +471,20 @@ function CustomerFlow({ c, dark }: { c: Palette; dark: boolean }) {
         </div>
       </div>
 
-      {/* Full-screen preview modal */}
+      {/* Full-screen preview */}
       <AnimatePresence>
         {previewExpanded && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setPreviewExpanded(false)}
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            onClick={() => setPreviewExpanded(false)}
             className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
-            <motion.div initial={{ scale: 0.92, y: 24 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.92 }} onClick={e => e.stopPropagation()} className="max-w-lg w-full my-8">
+            <motion.div initial={{ scale: 0.92, y: 24 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.92 }}
+              onClick={e => e.stopPropagation()} className="max-w-lg w-full my-8">
               {coupleNames && (
-                <div className="text-center text-white/80 text-sm font-semibold mb-4" style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '1.3rem' }}>
-                  {coupleNames}
-                </div>
+                <div className="text-center text-white/80 mb-4" style={{ fontFamily: "'Tangerine', cursive", fontSize: '2rem' }}>{coupleNames}</div>
               )}
               <CardPreview form={form} c={c} dark={dark} />
-              <button onClick={() => setPreviewExpanded(false)} className="mt-5 w-full py-3.5 rounded-full text-white font-bold text-sm tracking-wide" style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}>
+              <button onClick={() => setPreviewExpanded(false)} className="mt-5 w-full py-3.5 rounded-full text-white font-bold text-sm tracking-wide"
+                style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}>
                 ✓ Close Preview
               </button>
             </motion.div>
@@ -392,7 +496,7 @@ function CustomerFlow({ c, dark }: { c: Palette; dark: boolean }) {
       <AnimatePresence>
         {toast && (
           <motion.div initial={{ opacity: 0, y: 48, scale: 0.88 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 48, scale: 0.88 }}
-            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-6 py-4 rounded-full shadow-2xl text-sm font-semibold text-white flex items-center gap-2 max-w-sm text-center"
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-6 py-4 rounded-full shadow-2xl text-sm font-semibold text-white flex items-center gap-2 max-w-xs text-center"
             style={{ background: toast.type === 'error' ? `linear-gradient(135deg, ${c.primary}, #c44)` : `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}>
             {toast.type === 'error' ? <Info className="w-4 h-4 shrink-0" /> : <Check className="w-4 h-4 shrink-0" />}
             {toast.msg}
@@ -404,7 +508,7 @@ function CustomerFlow({ c, dark }: { c: Palette; dark: boolean }) {
 }
 
 /* ─── Hero ───────────────────────────────────────────────────────────────── */
-function Hero({ c, onFillSample }: { c: Palette; onFillSample: () => void }) {
+function Hero({ c, onFillSample, onClear, hasDraft }: { c: Palette; onFillSample: () => void; onClear: () => void; hasDraft: boolean }) {
   return (
     <div className="text-center mb-10 sm:mb-12">
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
@@ -423,8 +527,7 @@ function Hero({ c, onFillSample }: { c: Palette; onFillSample: () => void }) {
         22 ready invitation texts · 12 deities · No writing needed
       </motion.p>
 
-      {/* How it works */}
-      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.28 }}
+      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.26 }}
         className="flex items-center justify-center gap-2 sm:gap-4 mt-6 flex-wrap">
         {[
           { n: '1', l: 'Fill names' },
@@ -435,9 +538,7 @@ function Hero({ c, onFillSample }: { c: Palette; onFillSample: () => void }) {
         ].map((s, i) => (
           <React.Fragment key={s.n}>
             <div className="flex items-center gap-1.5">
-              <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white" style={{ background: c.gold }}>
-                {s.n}
-              </div>
+              <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white" style={{ background: c.gold }}>{s.n}</div>
               <span className="text-xs font-semibold" style={{ color: c.subtext }}>{s.l}</span>
             </div>
             {i < 4 && <ChevronRight className="w-3 h-3 opacity-30" />}
@@ -445,13 +546,19 @@ function Hero({ c, onFillSample }: { c: Palette; onFillSample: () => void }) {
         ))}
       </motion.div>
 
-      {/* Sample fill CTA */}
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.36 }} className="mt-5">
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.36 }} className="mt-5 flex items-center justify-center gap-2 flex-wrap">
         <button onClick={onFillSample}
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border text-xs font-bold transition-all hover:scale-105 active:scale-95"
           style={{ borderColor: c.gold, color: c.gold, background: `${c.gold}10` }}>
           <Zap className="w-3.5 h-3.5" /> See a sample card first
         </button>
+        {hasDraft && (
+          <button onClick={onClear}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-full border text-xs font-semibold transition-all hover:scale-105"
+            style={{ borderColor: c.border, color: c.subtext }}>
+            <X className="w-3 h-3" /> Clear & start fresh
+          </button>
+        )}
       </motion.div>
 
       <Divider c={c} />
@@ -463,16 +570,14 @@ function Divider({ c, w = 'w-28' }: { c: Palette; w?: string }) {
   return (
     <div className="flex items-center justify-center gap-3 mt-6">
       <div className={`h-px ${w}`} style={{ background: `linear-gradient(90deg, transparent, ${c.gold})` }} />
-      <svg width="18" height="18" viewBox="0 0 20 20" fill={c.gold}>
-        <path d="M10 2 L 12 8 L 18 10 L 12 12 L 10 18 L 8 12 L 2 10 L 8 8 Z" />
-      </svg>
+      <svg width="18" height="18" viewBox="0 0 20 20" fill={c.gold}><path d="M10 2 L 12 8 L 18 10 L 12 12 L 10 18 L 8 12 L 2 10 L 8 8 Z" /></svg>
       <div className={`h-px ${w}`} style={{ background: `linear-gradient(90deg, ${c.gold}, transparent)` }} />
     </div>
   );
 }
 
 /* ─── Stepper ────────────────────────────────────────────────────────────── */
-function Stepper({ step, setStep, c, dark, saving }: { step: number; setStep: (n: number) => void; c: Palette; dark: boolean; saving: boolean }) {
+function Stepper({ step, setStep, c, dark, saving, offline }: { step: number; setStep: (n: number) => void; c: Palette; dark: boolean; saving: boolean; offline: boolean }) {
   const pct = (step / (STEPS.length - 1)) * 100;
   return (
     <div className="rounded-3xl border p-5 shadow-xl" style={{ borderColor: c.border, background: c.surface, backdropFilter: 'blur(20px)' }}>
@@ -481,19 +586,24 @@ function Stepper({ step, setStep, c, dark, saving }: { step: number; setStep: (n
           <div className="text-[10px] font-bold uppercase tracking-[0.25em]" style={{ color: c.gold }}>Step {step + 1} of {STEPS.length} · {STEPS[step].label}</div>
           <div className="text-xs mt-0.5 leading-snug" style={{ color: c.subtext }}>{STEPS[step].tip}</div>
         </div>
-        <motion.div animate={{ opacity: saving ? 1 : 0.65 }} className="text-[10px] font-semibold flex items-center gap-1.5 shrink-0 mt-0.5" style={{ color: saving ? c.gold : c.subtext }}>
-          {saving
-            ? (<><div className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: c.gold }} />Saving…</>)
-            : (<><Check className="w-3 h-3" style={{ color: '#22c55e' }} />Saved</>)}
-        </motion.div>
+        <div className="flex items-center gap-2 shrink-0 mt-0.5">
+          {offline && (
+            <div className="flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded-full" style={{ background: '#f9923220', color: '#f97316' }}>
+              <CloudOff className="w-3 h-3" /> Offline
+            </div>
+          )}
+          <motion.div animate={{ opacity: saving ? 1 : 0.65 }} className="text-[10px] font-semibold flex items-center gap-1.5" style={{ color: saving ? c.gold : c.subtext }}>
+            {saving
+              ? (<><div className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: c.gold }} />Saving…</>)
+              : (<><Save className="w-3 h-3" style={{ color: '#22c55e' }} />Saved</>)}
+          </motion.div>
+        </div>
       </div>
-      {/* Progress bar */}
       <div className="relative h-1.5 rounded-full overflow-hidden mb-5" style={{ background: dark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)' }}>
         <motion.div initial={false} animate={{ width: `${pct}%` }} transition={{ type: 'spring', stiffness: 65, damping: 18 }}
           className="absolute inset-y-0 left-0 rounded-full"
           style={{ background: `linear-gradient(90deg, ${c.primary}, ${c.gold})` }} />
       </div>
-      {/* Step dots */}
       <div className="flex justify-between gap-0.5 overflow-x-auto -mx-1 px-1 pb-0.5" style={{ scrollbarWidth: 'none' }}>
         {STEPS.map((s, i) => {
           const done = i < step, active = i === step;
@@ -515,9 +625,7 @@ function Stepper({ step, setStep, c, dark, saving }: { step: number; setStep: (n
                     animate={{ scale: [1, 1.28, 1], opacity: [0.7, 0, 0.7] }} transition={{ duration: 2.2, repeat: Infinity }} />
                 )}
               </div>
-              <div className="text-[9px] font-semibold whitespace-nowrap leading-none" style={{ color: active ? c.gold : done ? c.primary : c.subtext }}>
-                {s.short}
-              </div>
+              <div className="text-[9px] font-semibold whitespace-nowrap leading-none" style={{ color: active ? c.gold : done ? c.primary : c.subtext }}>{s.short}</div>
             </button>
           );
         })}
@@ -548,9 +656,8 @@ function NavButtons({ step, prev, next, onSubmit, c, canNext }: { step: number; 
           <motion.button onClick={next} whileTap={{ scale: 0.96 }} whileHover={{ scale: 1.02 }}
             className="flex items-center gap-2 px-8 py-3.5 rounded-full text-sm font-bold text-white shadow-2xl tracking-wide"
             style={{
-              background: canNext ? `linear-gradient(135deg, ${c.primary}, ${c.gold})` : `${c.subtext}40`,
+              background: canNext ? `linear-gradient(135deg, ${c.primary}, ${c.gold})` : `${c.subtext}38`,
               boxShadow: canNext ? `0 12px 36px -10px ${c.primary}70` : 'none',
-              cursor: canNext ? 'pointer' : 'not-allowed'
             }}>
             Continue <ChevronRight className="w-4 h-4" />
           </motion.button>
@@ -603,7 +710,7 @@ function Field({ label, children, hint, required, c }: { label: string; children
   return (
     <label className="block">
       <div className="text-[10px] font-bold uppercase tracking-[0.15em] mb-2 flex items-center gap-1.5" style={{ color: c.subtext }}>
-        {label} {required && <span style={{ color: c.accent }}>*</span>}
+        {label} {required && <span style={{ color: '#C83A28' }}>*</span>}
         {hint && <span className="text-[9px] font-normal normal-case tracking-normal opacity-70">— {hint}</span>}
       </div>
       {children}
@@ -615,8 +722,8 @@ function Input({ c, className = '', ...props }: React.InputHTMLAttributes<HTMLIn
   return (
     <input className={`w-full px-4 py-3 rounded-2xl text-sm transition-all outline-none ${className}`}
       style={{ background: 'rgba(255,255,255,0.55)', border: `1.5px solid ${c.border}`, color: c.text }}
-      onFocus={e => { (e.target as HTMLInputElement).style.borderColor = c.gold; (e.target as HTMLInputElement).style.background = 'rgba(255,255,255,0.85)'; }}
-      onBlur={e => { (e.target as HTMLInputElement).style.borderColor = c.border; (e.target as HTMLInputElement).style.background = 'rgba(255,255,255,0.55)'; }}
+      onFocus={e => { e.currentTarget.style.borderColor = c.gold; e.currentTarget.style.background = 'rgba(255,255,255,0.88)'; }}
+      onBlur={e => { e.currentTarget.style.borderColor = c.border; e.currentTarget.style.background = 'rgba(255,255,255,0.55)'; }}
       {...props} />
   );
 }
@@ -625,8 +732,8 @@ function Textarea({ c, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElem
   return (
     <textarea className="w-full px-4 py-3 rounded-2xl text-sm transition-all outline-none resize-none"
       style={{ background: 'rgba(255,255,255,0.55)', border: `1.5px solid ${c.border}`, color: c.text }}
-      onFocus={e => { (e.target as HTMLTextAreaElement).style.borderColor = c.gold; }}
-      onBlur={e => { (e.target as HTMLTextAreaElement).style.borderColor = c.border; }}
+      onFocus={e => { e.currentTarget.style.borderColor = c.gold; }}
+      onBlur={e => { e.currentTarget.style.borderColor = c.border; }}
       {...props} />
   );
 }
@@ -643,30 +750,72 @@ function Select({ c, children, className = '', ...props }: React.SelectHTMLAttri
   );
 }
 
+/* Prefix + Name row: small prefix input + full name input side by side */
+function PrefixNameField({ label, prefixValue, prefixPath, nameValue, namePath, namePlaceholder, prefixPlaceholder = 'Prefix', required, update, c }: {
+  label: string; prefixValue: string; prefixPath: string; nameValue: string; namePath: string;
+  namePlaceholder?: string; prefixPlaceholder?: string; required?: boolean;
+  update: (path: string, value: unknown) => void; c: Palette;
+}) {
+  return (
+    <Field label={label} required={required} c={c}>
+      <div className="flex gap-2">
+        <input value={prefixValue} onChange={e => update(prefixPath, e.target.value)} placeholder={prefixPlaceholder}
+          title="Write any prefix here (e.g. Shri, Smt., Kumari, Late Shri)"
+          className="w-28 shrink-0 px-3 py-3 rounded-2xl text-sm transition-all outline-none"
+          style={{ background: 'rgba(255,255,255,0.55)', border: `1.5px solid ${c.gold}50`, color: c.text }}
+          onFocus={e => { e.currentTarget.style.borderColor = c.gold; e.currentTarget.style.background = 'rgba(255,255,255,0.88)'; }}
+          onBlur={e => { e.currentTarget.style.borderColor = `${c.gold}50`; e.currentTarget.style.background = 'rgba(255,255,255,0.55)'; }}
+        />
+        <Input c={c} className="flex-1" value={nameValue} onChange={e => update(namePath, e.target.value)} placeholder={namePlaceholder} />
+      </div>
+      <div className="text-[9px] mt-1 pl-1" style={{ color: c.subtext }}>Left box = prefix (Shri / Smt. / Kumari / Late…) — right box = full name</div>
+    </Field>
+  );
+}
+
 /* ─── Step 0: Family ─────────────────────────────────────────────────────── */
-function StepFamily({ form, update, c }: { form: FormState; update: (path: string, value: unknown) => void; c: Palette }) {
+function StepFamily({ form, update, setForm, c }: { form: FormState; update: (path: string, value: unknown) => void; setForm: React.Dispatch<React.SetStateAction<FormState>>; c: Palette }) {
   const filled = form.bride.name && form.groom.name;
+
   return (
     <Section title="The Two Families" eyebrow="Step 1 of 8"
-      subtitle="Enter names exactly as they should appear on the wedding card."
-      tip="Required: At least the bride's and groom's first names."
+      subtitle="Enter names exactly as they should appear on the card. Use the prefix box for Shri, Smt., Kumari, Late, etc."
       c={c} icon={Heart}>
 
-      {/* Personalized greeting */}
-      <AnimatePresence>
-        {filled && (
+      {filled && (
+        <AnimatePresence>
           <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
             className="mb-5 p-4 rounded-2xl text-center border"
             style={{ borderColor: `${c.gold}40`, background: `linear-gradient(135deg, ${c.gold}10, ${c.primary}08)` }}>
-            <div className="text-lg font-medium" style={{ fontFamily: "'Tangerine', cursive", color: c.gold, fontSize: '1.8rem' }}>
+            <div style={{ fontFamily: "'Tangerine', cursive", color: c.gold, fontSize: '1.9rem' }}>
               🌹 {form.bride.name} & {form.groom.name}
             </div>
             <div className="text-[10px] font-semibold uppercase tracking-wider mt-1" style={{ color: c.subtext }}>
-              Your card is taking shape beautifully!
+              Your card is looking beautiful!
             </div>
           </motion.div>
-        )}
-      </AnimatePresence>
+        </AnimatePresence>
+      )}
+
+      {/* Bride / Groom order toggle */}
+      <div className="mb-6 p-4 rounded-2xl border" style={{ borderColor: c.border, background: 'rgba(255,255,255,0.35)' }}>
+        <div className="text-[10px] font-bold uppercase tracking-[0.2em] mb-3" style={{ color: c.gold }}>Card Display Order</div>
+        <div className="flex items-center gap-3 flex-wrap">
+          <button onClick={() => update('brideFirst', true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 text-xs font-bold transition-all"
+            style={{ borderColor: form.brideFirst ? c.gold : c.border, background: form.brideFirst ? `${c.gold}15` : 'transparent', color: form.brideFirst ? c.gold : c.text }}>
+            👰 Bride first, 🤵 Groom second
+          </button>
+          <button onClick={() => update('brideFirst', false)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 text-xs font-bold transition-all"
+            style={{ borderColor: !form.brideFirst ? c.gold : c.border, background: !form.brideFirst ? `${c.gold}15` : 'transparent', color: !form.brideFirst ? c.gold : c.text }}>
+            🤵 Groom first, 👰 Bride second
+          </button>
+          <div className="text-[10px]" style={{ color: c.subtext }}>
+            <ArrowLeftRight className="w-3 h-3 inline mr-1" />Changes the order on the card preview
+          </div>
+        </div>
+      </div>
 
       {/* Host type */}
       <div className="mb-6">
@@ -685,21 +834,18 @@ function StepFamily({ form, update, c }: { form: FormState; update: (path: strin
                   background: form.hostType === h.id ? `${c.gold}15` : 'rgba(255,255,255,0.4)',
                   color: form.hostType === h.id ? c.gold : c.text
                 }}>
-                <div className="text-lg mb-1">{h.emoji}</div>
-                {h.label}
+                <div className="text-lg mb-1">{h.emoji}</div>{h.label}
               </button>
             ))}
           </div>
         </Field>
       </div>
 
-      {/* Person cards */}
       <div className="grid sm:grid-cols-2 gap-5">
         <PersonCard side="Bride" person={form.bride} update={update} prefix="bride" c={c} />
         <PersonCard side="Groom" person={form.groom} update={update} prefix="groom" c={c} />
       </div>
 
-      {/* Family details */}
       <div className="mt-7 pt-6 border-t" style={{ borderColor: c.border }}>
         <div className="text-[10px] font-bold uppercase tracking-[0.25em] mb-4" style={{ color: c.gold }}>Family Details (Optional)</div>
         <div className="grid sm:grid-cols-2 gap-4">
@@ -718,28 +864,43 @@ function PersonCard({ side, person, update, prefix, c }: { side: string; person:
   return (
     <div className="rounded-2xl p-5 border relative overflow-hidden"
       style={{ borderColor: c.border, background: `linear-gradient(180deg, ${isBride ? c.primary : c.gold}08, transparent)` }}>
-      <div className="absolute top-3 right-3 text-2xl opacity-25 select-none">{isBride ? '👰' : '🤵'}</div>
-      <div className="text-[10px] font-bold uppercase tracking-[0.3em] mb-4 flex items-center gap-2" style={{ color: isBride ? c.primary : c.goldDeep }}>
+      <div className="absolute top-3 right-3 text-2xl opacity-20 select-none">{isBride ? '👰' : '🤵'}</div>
+      <div className="text-[10px] font-bold uppercase tracking-[0.3em] mb-4" style={{ color: isBride ? c.primary : c.goldDeep }}>
         {isBride ? '👰' : '🤵'} {side}
       </div>
       <div className="space-y-3">
-        <Field label="Salutation" c={c}>
-          <Select c={c} value={person.salutation} onChange={e => update(`${prefix}.salutation`, e.target.value)}>
-            {isBride ? <><option>Ms.</option><option>Miss</option><option>Kumari</option></> : <><option>Mr.</option><option>Shri</option><option>Kumar</option></>}
-          </Select>
-        </Field>
-        <Field label={`${side}'s Full Name`} required c={c}>
-          <Input c={c} value={person.name} onChange={e => update(`${prefix}.name`, e.target.value)} placeholder={isBride ? 'Aditi Sharma' : 'Rohan Mehta'} />
-        </Field>
-        <Field label="Father's Name" hint="shown as S/o or D/o" c={c}>
-          <Input c={c} value={person.fatherName} onChange={e => update(`${prefix}.fatherName`, e.target.value)} placeholder="Shri Rajesh ..." />
-        </Field>
-        <Field label="Mother's Name" c={c}>
-          <Input c={c} value={person.motherName} onChange={e => update(`${prefix}.motherName`, e.target.value)} placeholder="Smt. Sunita ..." />
-        </Field>
-        <Field label="Grandparents" hint="optional" c={c}>
-          <Input c={c} value={person.grandparents} onChange={e => update(`${prefix}.grandparents`, e.target.value)} placeholder="Late Shri & Smt ..." />
-        </Field>
+        <PrefixNameField
+          label={`${side}'s Full Name`} required
+          prefixValue={person.namePrefix} prefixPath={`${prefix}.namePrefix`}
+          nameValue={person.name} namePath={`${prefix}.name`}
+          namePlaceholder={isBride ? 'Aditi Sharma' : 'Rohan Mehta'}
+          prefixPlaceholder="Kumari"
+          update={update} c={c}
+        />
+        <PrefixNameField
+          label="Father's Name"
+          prefixValue={person.fatherPrefix} prefixPath={`${prefix}.fatherPrefix`}
+          nameValue={person.fatherName} namePath={`${prefix}.fatherName`}
+          namePlaceholder={isBride ? 'Rajesh Sharma' : 'Mahesh Mehta'}
+          prefixPlaceholder="Shri"
+          update={update} c={c}
+        />
+        <PrefixNameField
+          label="Mother's Name"
+          prefixValue={person.motherPrefix} prefixPath={`${prefix}.motherPrefix`}
+          nameValue={person.motherName} namePath={`${prefix}.motherName`}
+          namePlaceholder={isBride ? 'Sunita Sharma' : 'Kavita Mehta'}
+          prefixPlaceholder="Smt."
+          update={update} c={c}
+        />
+        <PrefixNameField
+          label="Grandparents" hint="optional"
+          prefixValue={person.grandparentsPrefix} prefixPath={`${prefix}.grandparentsPrefix`}
+          nameValue={person.grandparents} namePath={`${prefix}.grandparents`}
+          namePlaceholder="Full Name"
+          prefixPlaceholder="Late Shri"
+          update={update} c={c}
+        />
       </div>
     </div>
   );
@@ -785,7 +946,7 @@ function StepDeities({ form, setForm, c }: { form: FormState; update: (path: str
       </div>
       <div className="mt-5 p-3 rounded-2xl text-xs font-semibold flex items-center gap-2" style={{ background: `${c.gold}10`, color: c.subtext }}>
         <Info className="w-4 h-4 shrink-0" style={{ color: c.gold }} />
-        Numbers show the order they'll appear on the card. Tap already-selected deities to remove them.
+        Numbers show the order they'll appear on the card. Tap a selected deity to remove it.
       </div>
     </Section>
   );
@@ -805,8 +966,8 @@ function StepInvitation({ form, update, c, dark }: { form: FormState; update: (p
   return (
     <>
       <Section title="Invitation Text" eyebrow="Step 3 of 8"
-        subtitle="22 ready-made paragraphs — just pick one. No need to write anything!"
-        tip="Click any card below to select it. You can change it later too."
+        subtitle="22 ready paragraphs — just pick one. No need to type anything!"
+        tip="Click any card to select it. You can change it later."
         c={c} icon={BookOpen}>
         <div className="flex flex-col sm:flex-row gap-2 mb-4">
           <div className="relative flex-1">
@@ -849,9 +1010,7 @@ function StepInvitation({ form, update, c, dark }: { form: FormState; update: (p
 
       {selected && (
         <div className="mt-5">
-          <Section title="Relation Word" eyebrow="Between Names"
-            subtitle="How the couple is joined on the card"
-            c={c} icon={Heart}>
+          <Section title="Relation Word" eyebrow="Between Names" subtitle="How the couple is joined on the card" c={c} icon={Heart}>
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
               {RELATION_WORDS.map(r => {
                 const active = form.relationWord === r.id;
@@ -862,9 +1021,7 @@ function StepInvitation({ form, update, c, dark }: { form: FormState; update: (p
                       borderColor: active ? c.gold : c.border,
                       background: active ? `${c.gold}15` : 'rgba(255,255,255,0.4)',
                       color: active ? c.gold : c.text,
-                      fontFamily: "'Tangerine', cursive",
-                      fontSize: '1.25rem',
-                      fontWeight: 700
+                      fontFamily: "'Tangerine', cursive", fontSize: '1.25rem', fontWeight: 700
                     }}>
                     {r.label}
                   </motion.button>
@@ -884,10 +1041,7 @@ function StepProgrammes({ form, setForm, c, dark }: { form: FormState; setForm: 
     const p = PROGRAMME_PRESETS.find(x => x.id === preset);
     setForm(prev => ({
       ...prev,
-      programmes: [...prev.programmes, {
-        id: Date.now(), preset, name: p?.name || 'Our Function',
-        date: '', time: '', venue: '', address: '', notes: ''
-      }]
+      programmes: [...prev.programmes, { id: Date.now(), preset, name: p?.name || 'Our Function', date: '', time: '', venue: '', address: '', notes: '' }]
     }));
   };
   const removeFn = (id: number) => setForm(prev => ({ ...prev, programmes: prev.programmes.filter(f => f.id !== id) }));
@@ -905,12 +1059,11 @@ function StepProgrammes({ form, setForm, c, dark }: { form: FormState; setForm: 
 
   return (
     <Section title="Functions & Events" eyebrow="Step 4 of 8"
-      subtitle="Add all your wedding functions in order. The date field is required for each."
-      tip="Tap a function icon below to quickly add it."
+      subtitle="Add all your wedding functions in order. Date is required for each."
+      tip="Tap a quick-add icon below to instantly add that function."
       c={c} icon={Calendar}>
-      {/* Quick add buttons */}
       <div className="mb-6">
-        <div className="text-[10px] font-bold uppercase tracking-[0.2em] mb-3" style={{ color: c.subtext }}>Quick Add</div>
+        <div className="text-[10px] font-bold uppercase tracking-[0.2em] mb-3" style={{ color: c.subtext }}>Quick Add a Function</div>
         <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
           {PROGRAMME_PRESETS.map(p => (
             <motion.button key={p.id} whileHover={{ y: -2 }} whileTap={{ scale: 0.95 }} onClick={() => addProgramme(p.id)}
@@ -932,7 +1085,7 @@ function StepProgrammes({ form, setForm, c, dark }: { form: FormState; setForm: 
       {form.programmes.length === 0 && (
         <div className="text-center py-10 rounded-2xl border-2 border-dashed text-sm" style={{ borderColor: c.border, color: c.subtext }}>
           <Calendar className="w-8 h-8 mx-auto mb-2 opacity-30" />
-          Tap any function above to add it here
+          Tap a function above to add it here
         </div>
       )}
 
@@ -943,20 +1096,18 @@ function StepProgrammes({ form, setForm, c, dark }: { form: FormState; setForm: 
             const missingDate = !f.date;
             return (
               <motion.div key={f.id} layout initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: -20 }}
-                className="rounded-2xl border overflow-hidden" style={{ borderColor: missingDate ? `${c.accent}50` : c.border, background: 'rgba(255,255,255,0.45)' }}>
+                className="rounded-2xl border overflow-hidden"
+                style={{ borderColor: missingDate ? `${c.accent}50` : c.border, background: 'rgba(255,255,255,0.45)' }}>
                 <div className="flex items-center gap-3 px-4 py-3 border-b" style={{ borderColor: c.border, background: `${preset?.color || c.gold}10` }}>
                   <div className="flex flex-col">
-                    <button onClick={() => move(f.id, -1)} disabled={i === 0} className="p-0.5 disabled:opacity-20 transition-opacity" style={{ color: c.gold }}><ArrowUp className="w-3 h-3" /></button>
-                    <button onClick={() => move(f.id, 1)} disabled={i === form.programmes.length - 1} className="p-0.5 disabled:opacity-20 transition-opacity" style={{ color: c.gold }}><ArrowDown className="w-3 h-3" /></button>
+                    <button onClick={() => move(f.id, -1)} disabled={i === 0} className="p-0.5 disabled:opacity-20" style={{ color: c.gold }}><ArrowUp className="w-3 h-3" /></button>
+                    <button onClick={() => move(f.id, 1)} disabled={i === form.programmes.length - 1} className="p-0.5 disabled:opacity-20" style={{ color: c.gold }}><ArrowDown className="w-3 h-3" /></button>
                   </div>
-                  <div className="w-9 h-9 rounded-xl flex items-center justify-center text-xl shrink-0" style={{ background: `${preset?.color || c.gold}22` }}>
-                    {preset?.icon || '✨'}
-                  </div>
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center text-xl shrink-0" style={{ background: `${preset?.color || c.gold}22` }}>{preset?.icon || '✨'}</div>
                   <input value={f.name} onChange={e => updateFn(f.id, 'name', e.target.value)}
-                    className="flex-1 bg-transparent font-semibold outline-none text-base min-w-0"
-                    style={{ color: c.text }} placeholder="Function name" />
+                    className="flex-1 bg-transparent font-semibold outline-none text-base min-w-0" style={{ color: c.text }} placeholder="Function name" />
                   {missingDate && <span className="text-[9px] font-bold px-2 py-0.5 rounded-full shrink-0" style={{ background: `${c.accent}18`, color: c.accent }}>Add date ↓</span>}
-                  <button onClick={() => removeFn(f.id)} className="p-2 rounded-lg hover:bg-red-500/12 transition shrink-0" style={{ color: '#dc2626' }}><Trash2 className="w-4 h-4" /></button>
+                  <button onClick={() => removeFn(f.id)} className="p-2 rounded-lg transition shrink-0" style={{ color: '#dc2626' }}><Trash2 className="w-4 h-4" /></button>
                 </div>
                 <div className="p-4 grid sm:grid-cols-2 gap-3">
                   <Field label="Date" required c={c}><Input c={c} type="date" value={f.date} onChange={e => updateFn(f.id, 'date', e.target.value)} /></Field>
@@ -978,7 +1129,7 @@ function StepExtras({ form, update, c, dark }: { form: FormState; update: (path:
   return (
     <>
       <Section title="Closing Line" eyebrow="Step 5A of 8"
-        subtitle="The message at the bottom of the card about presents & blessings."
+        subtitle="The message at the bottom about blessings and gifts."
         c={c} icon={Star}>
         <div className="grid sm:grid-cols-2 gap-2">
           {CLOSING_TAGS.map(t => {
@@ -1029,7 +1180,7 @@ function StepExtras({ form, update, c, dark }: { form: FormState; update: (path:
 
       <div className="mt-5">
         <Section title="With Best Compliments From" eyebrow="Step 5C · Optional"
-          subtitle="Names of well-wishers, sponsors, or other relatives."
+          subtitle="Names of well-wishers, sponsors, or relatives to list at bottom."
           c={c} icon={FileText}>
           <Textarea c={c} rows={3} value={form.withCompliments} onChange={e => update('withCompliments', e.target.value)}
             placeholder="e.g. Sharma & Gupta Families, All relatives and friends…" />
@@ -1045,13 +1196,11 @@ function StepDesign({ form, update, c, dark }: { form: FormState; update: (path:
   const [cat, setCat] = useState('All');
   const [target, setTarget] = useState('heading');
   const cats = ['All', ...Array.from(new Set(FONTS.map(f => f.cat)))];
-
   const filtered = FONTS.filter(f =>
     (cat === 'All' || f.cat === cat) &&
     (form.design.language === 'English' ? f.langs.includes('English') : f.langs.includes(form.design.language) || f.langs.includes('English')) &&
     f.name.toLowerCase().includes(search.toLowerCase())
   );
-
   const previewText = form.design.language === 'Hindi' ? 'विवाह आमंत्रण'
     : form.design.language === 'Marathi' ? 'विवाह सोहळा'
     : form.design.language === 'Gujarati' ? 'લગ્ન આમંત્રણ'
@@ -1138,9 +1287,7 @@ function StepDesign({ form, update, c, dark }: { form: FormState; update: (path:
                     <div className="min-w-0 flex-1">
                       <div className="truncate" style={{ fontFamily: f.family, fontSize: '1.35em', color: c.text, lineHeight: 1.1 }}>{previewText}</div>
                       <div className="text-[10px] mt-1 flex items-center gap-2" style={{ color: c.subtext }}>
-                        <span className="font-bold">{f.name}</span>
-                        <span className="opacity-50">·</span>
-                        <span>{f.cat}</span>
+                        <span className="font-bold">{f.name}</span><span className="opacity-50">·</span><span>{f.cat}</span>
                       </div>
                     </div>
                     {active && <Check className="w-4 h-4 shrink-0 ml-2" style={{ color: c.gold }} strokeWidth={3} />}
@@ -1163,8 +1310,7 @@ function SliderField({ label, value, min, max, step, unit, onChange, c }: { labe
         <div className="text-xs font-mono font-bold px-2 py-0.5 rounded-lg" style={{ color: c.gold, background: `${c.gold}12` }}>{value}{unit}</div>
       </div>
       <input type="range" min={min} max={max} step={step} value={value} onChange={e => onChange(+e.target.value)}
-        className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
-        style={{ accentColor: c.gold }} />
+        className="w-full h-1.5 rounded-full appearance-none cursor-pointer" style={{ accentColor: c.gold }} />
     </div>
   );
 }
@@ -1182,16 +1328,13 @@ function StepPreview({ form, update, c, dark }: { form: FormState; update: (path
           return (
             <button key={d.k} onClick={() => update('preview.device', d.k)}
               className="flex items-center gap-2 px-4 py-2 rounded-full border text-xs font-bold transition-all"
-              style={{
-                borderColor: active ? 'transparent' : c.border,
-                background: active ? `linear-gradient(135deg, ${c.primary}, ${c.gold})` : 'rgba(255,255,255,0.5)',
-                color: active ? 'white' : c.text
-              }}>
+              style={{ borderColor: active ? 'transparent' : c.border, background: active ? `linear-gradient(135deg, ${c.primary}, ${c.gold})` : 'rgba(255,255,255,0.5)', color: active ? 'white' : c.text }}>
               <Icon className="w-3.5 h-3.5" /> {d.l}
             </button>
           );
         })}
-        <button onClick={() => window.print()} className="flex items-center gap-2 px-4 py-2 rounded-full border text-xs font-bold ml-auto transition hover:opacity-80" style={{ borderColor: c.border, color: c.text, background: 'rgba(255,255,255,0.5)' }}>
+        <button onClick={() => window.print()} className="flex items-center gap-2 px-4 py-2 rounded-full border text-xs font-bold ml-auto transition hover:opacity-80"
+          style={{ borderColor: c.border, color: c.text, background: 'rgba(255,255,255,0.5)' }}>
           <Printer className="w-3.5 h-3.5" /> Print
         </button>
       </div>
@@ -1208,6 +1351,7 @@ function StepSubmit({ form, update, c, onSubmit, setStep, dark }: { form: FormSt
   const closing = CLOSING_TAGS.find(t => t.id === form.closingTag);
   const sections = [
     { label: 'Bride & Groom', step: 0, value: `${form.bride.name || '—'} & ${form.groom.name || '—'}`, icon: Heart, ok: !!(form.bride.name && form.groom.name) },
+    { label: 'Card Order', step: 0, value: form.brideFirst ? 'Bride first' : 'Groom first', icon: ArrowLeftRight, ok: true },
     { label: 'Deities', step: 1, value: `${form.deities.length} selected`, icon: Star, ok: form.deities.length > 0 },
     { label: 'Template', step: 2, value: template ? `#${template.id} · ${template.category}` : 'Not selected', icon: BookOpen, ok: !!template },
     { label: 'Programmes', step: 3, value: `${form.programmes.filter(p => p.date).length} with dates`, icon: Calendar, ok: form.programmes.some(p => p.date) },
@@ -1217,7 +1361,7 @@ function StepSubmit({ form, update, c, onSubmit, setStep, dark }: { form: FormSt
 
   return (
     <Section title="Review & Submit" eyebrow="Final Step"
-      subtitle="Double-check everything below. Once submitted, the designer begins work."
+      subtitle="Double-check everything below. Once submitted, the designer begins work immediately."
       tip="Make sure all names are spelled exactly as you want them on the card."
       c={c} icon={CheckCircle2}>
       <div className="space-y-2 mb-6">
@@ -1246,7 +1390,7 @@ function StepSubmit({ form, update, c, onSubmit, setStep, dark }: { form: FormSt
         <input type="checkbox" checked={form.meta.accepted} onChange={e => update('meta.accepted', e.target.checked)} className="mt-1 w-4 h-4 shrink-0" style={{ accentColor: c.gold }} />
         <div>
           <div className="text-sm font-semibold leading-snug" style={{ color: c.text }}>I have checked all details and confirm they are correct</div>
-          <div className="text-xs mt-1 leading-snug" style={{ color: c.subtext }}>The designer will use this content exactly as shown. Proofread all names and dates.</div>
+          <div className="text-xs mt-1 leading-snug" style={{ color: c.subtext }}>The designer will use this content exactly as shown. Proofread all names and dates carefully.</div>
         </div>
       </label>
     </Section>
@@ -1261,6 +1405,12 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
   const kidsLine = KIDS_LINES.find(t => t.id === form.kidsLine);
   const relation = RELATION_WORDS.find(r => r.id === form.relationWord);
   const hasNames = !!(form.bride.name || form.groom.name);
+
+  // first/second based on brideFirst toggle
+  const first = form.brideFirst ? form.bride : form.groom;
+  const second = form.brideFirst ? form.groom : form.bride;
+  const firstLabel = form.brideFirst ? 'BRIDE' : 'GROOM';
+  const secondLabel = form.brideFirst ? 'GROOM' : 'BRIDE';
 
   const cardBg = layout === 'modern'
     ? 'linear-gradient(180deg, #FFFFFF 0%, #FAF6EC 100%)'
@@ -1293,6 +1443,7 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
       <div className={`relative ${compact ? 'p-5 pt-6' : 'p-7 sm:p-10 pt-8'} text-center`}
         style={{ fontFamily: form.design.bodyFont, fontSize: `${form.design.fontSize}px`, letterSpacing: `${form.design.letterSpacing}px`, lineHeight: form.design.lineHeight }}>
 
+        {/* Deities */}
         {form.deities.length > 0 && (
           <div className="mb-3 px-2 py-2 rounded-lg" style={{ background: 'rgba(123, 30, 46, 0.05)', border: '1px dashed rgba(192, 137, 46, 0.45)' }}>
             <div className="flex items-center justify-around gap-1 flex-wrap">
@@ -1303,7 +1454,6 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
             </div>
           </div>
         )}
-
         {form.deities[0] && (
           <div className="text-[9px] uppercase tracking-[0.35em] mb-3 font-semibold" style={{ color: '#7B1E2E', fontFamily: form.design.headingFont }}>
             {DEITIES.find(d => d.id === form.deities[0])?.mantra}
@@ -1312,27 +1462,41 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
 
         <DecorativeDivider compact={compact} />
 
-        {(form.bride.motherName || form.bride.fatherName || form.groom.motherName || form.groom.fatherName) && form.hostType === 'parents' && (
+        {/* Host line — show exactly as user typed, no auto Mr/Mrs */}
+        {form.hostType === 'parents' && (first.fatherName || first.motherName || second.fatherName || second.motherName) && (
           <div className="text-[11px] mb-2 font-medium" style={{ color: '#5A0F1C' }}>
-            <div>Mrs. {form.bride.motherName || form.groom.motherName || '—'} &nbsp;&amp;&nbsp; Mr. {form.bride.fatherName || form.groom.fatherName || '—'}</div>
+            {pn(first.motherPrefix, first.motherName) || pn(second.motherPrefix, second.motherName) || ''}
+            {((first.motherName || second.motherName) && (first.fatherName || second.fatherName)) ? ' & ' : ''}
+            {pn(first.fatherPrefix, first.fatherName) || pn(second.fatherPrefix, second.fatherName) || ''}
           </div>
         )}
 
+        {/* Invitation template */}
         {template && (
           <p className="mb-5 italic opacity-80 max-w-md mx-auto whitespace-pre-line" style={{ fontSize: '0.88em', fontFamily: form.design.bodyFont, lineHeight: 1.6 }}>
             {fillTemplate(template.text, form).replace(/\{child\}/g, '').replace(/\n\n\n/g, '\n\n')}
           </p>
         )}
 
+        {/* Names block — order controlled by brideFirst */}
         <div className="my-5">
-          <div className="text-[9px] font-bold mb-1.5" style={{ color: '#7B1E2E', letterSpacing: '0.45em' }}>BRIDE</div>
+          <div className="text-[9px] font-bold mb-1.5" style={{ color: '#7B1E2E', letterSpacing: '0.45em' }}>{firstLabel}</div>
+          {first.namePrefix && (
+            <div className="text-xs font-medium mb-0.5" style={{ color: '#5A0F1C' }}>{first.namePrefix}</div>
+          )}
           <div className="font-medium leading-none mb-1" style={{ fontFamily: form.design.headingFont, fontSize: compact ? '1.6em' : '2.4em', color: '#1A0608' }}>
-            {form.bride.name || <span className="opacity-30 italic">Bride Name</span>}
+            {first.name || <span className="opacity-30 italic">{firstLabel === 'BRIDE' ? 'Bride Name' : 'Groom Name'}</span>}
           </div>
-          <div className="text-[10px] opacity-65 mt-1 font-medium">
-            D/o {form.bride.fatherName || '—'} {form.bride.motherName ? `& ${form.bride.motherName}` : ''}
-          </div>
+          {(first.fatherName || first.motherName) && (
+            <div className="text-[10px] opacity-65 mt-1 font-medium">
+              {pn(first.fatherPrefix, first.fatherName)}{first.fatherName && first.motherName ? ' & ' : ''}{pn(first.motherPrefix, first.motherName)}
+            </div>
+          )}
+          {first.grandparents && (
+            <div className="text-[10px] opacity-55 mt-0.5">{pn(first.grandparentsPrefix, first.grandparents)}</div>
+          )}
 
+          {/* Relation word */}
           <div className="my-3 relative">
             <div style={{ fontFamily: form.design.scriptFont || "'Tangerine', cursive", fontSize: compact ? '2.2em' : '3em', color: '#C0892E', lineHeight: 0.9 }}>
               {relation?.label || 'Weds'}
@@ -1340,15 +1504,24 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
             <div className="absolute left-1/2 -translate-x-1/2 -bottom-1 w-12 h-px" style={{ background: '#C0892E' }} />
           </div>
 
-          <div className="text-[9px] font-bold mb-1.5" style={{ color: '#7B1E2E', letterSpacing: '0.45em' }}>GROOM</div>
+          <div className="text-[9px] font-bold mb-1.5 mt-1" style={{ color: '#7B1E2E', letterSpacing: '0.45em' }}>{secondLabel}</div>
+          {second.namePrefix && (
+            <div className="text-xs font-medium mb-0.5" style={{ color: '#5A0F1C' }}>{second.namePrefix}</div>
+          )}
           <div className="font-medium leading-none mb-1" style={{ fontFamily: form.design.headingFont, fontSize: compact ? '1.6em' : '2.4em', color: '#1A0608' }}>
-            {form.groom.name || <span className="opacity-30 italic">Groom Name</span>}
+            {second.name || <span className="opacity-30 italic">{secondLabel === 'BRIDE' ? 'Bride Name' : 'Groom Name'}</span>}
           </div>
-          <div className="text-[10px] opacity-65 mt-1 font-medium">
-            S/o {form.groom.fatherName || '—'} {form.groom.motherName ? `& ${form.groom.motherName}` : ''}
-          </div>
+          {(second.fatherName || second.motherName) && (
+            <div className="text-[10px] opacity-65 mt-1 font-medium">
+              {pn(second.fatherPrefix, second.fatherName)}{second.fatherName && second.motherName ? ' & ' : ''}{pn(second.motherPrefix, second.motherName)}
+            </div>
+          )}
+          {second.grandparents && (
+            <div className="text-[10px] opacity-55 mt-0.5">{pn(second.grandparentsPrefix, second.grandparents)}</div>
+          )}
         </div>
 
+        {/* Programmes */}
         {form.programmes.some(p => p.date) && (
           <div className="mt-6 pt-4" style={{ borderTop: '1px solid rgba(123, 30, 46, 0.2)' }}>
             <DecorativeDivider compact={compact} mini />
@@ -1382,31 +1555,25 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
             <div className="opacity-65">{form.family.residenceAddress}</div>
           </div>
         )}
-
         {form.withCompliments && (
           <div className="mt-3 text-[10px]">
             <div className="font-bold mb-0.5" style={{ color: '#7B1E2E' }}>With Best Compliments From:</div>
             <div className="opacity-65">{form.withCompliments}</div>
           </div>
         )}
-
         {kidsLine && (
           <div className="mt-4 px-3 py-2 rounded-lg" style={{ background: 'rgba(192, 137, 46, 0.10)' }}>
             <div className="text-[10px] italic" style={{ color: '#5A0F1C' }}>{kidsLine.label}</div>
           </div>
         )}
-
         {closing && (
           <div className="mt-4 text-[10px] font-bold tracking-[0.28em]" style={{ color: '#7B1E2E' }}>
             ✦ {closing.label.toUpperCase()} ✦
           </div>
         )}
-
         <div className="mt-4 flex justify-center">
           <svg width="40" height="12" viewBox="0 0 40 12" fill="#C0892E" opacity="0.5">
-            <circle cx="6" cy="6" r="2" />
-            <circle cx="20" cy="6" r="3" />
-            <circle cx="34" cy="6" r="2" />
+            <circle cx="6" cy="6" r="2" /><circle cx="20" cy="6" r="3" /><circle cx="34" cy="6" r="2" />
           </svg>
         </div>
       </div>
@@ -1418,9 +1585,7 @@ function DecorativeDivider({ compact, mini }: { compact?: boolean; mini?: boolea
   return (
     <div className="flex items-center justify-center gap-2 mb-3">
       <div className={`h-px ${mini ? 'w-8' : compact ? 'w-12' : 'w-20'}`} style={{ background: 'linear-gradient(90deg, transparent, #C0892E)' }} />
-      <svg width="12" height="12" viewBox="0 0 14 14" fill="#C0892E">
-        <path d="M7 1 L 9 5 L 13 7 L 9 9 L 7 13 L 5 9 L 1 7 L 5 5 Z" />
-      </svg>
+      <svg width="12" height="12" viewBox="0 0 14 14" fill="#C0892E"><path d="M7 1 L 9 5 L 13 7 L 9 9 L 7 13 L 5 9 L 1 7 L 5 5 Z" /></svg>
       <div className={`h-px ${mini ? 'w-8' : compact ? 'w-12' : 'w-20'}`} style={{ background: 'linear-gradient(90deg, #C0892E, transparent)' }} />
     </div>
   );
@@ -1430,25 +1595,21 @@ function DecorativeDivider({ compact, mini }: { compact?: boolean; mini?: boolea
 function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOrder; c: Palette; form: FormState; dark: boolean; onReset: () => void }) {
   const corel = generateCorelText(form);
   const [copied, setCopied] = useState(false);
-
   const copy = () => { navigator.clipboard?.writeText(corel); setCopied(true); setTimeout(() => setCopied(false), 1600); };
 
   const shareWhatsApp = () => {
-    const coupleLine = (form.bride.name && form.groom.name) ? `*Couple:* ${form.bride.name} ❤️ ${form.groom.name}\n` : '';
     const text = encodeURIComponent(
       `🌹 *New Wedding Matter Order*\n\n` +
       `*Order ID:* ${submitted.orderId}\n` +
-      coupleLine +
+      (form.bride.name && form.groom.name ? `*Couple:* ${form.bride.name} ❤️ ${form.groom.name}\n` : '') +
       `*Submitted:* ${submitted.at}\n\n` +
-      `Please check the designer console for full card details and the CorelDRAW export.\n\n` +
-      `_Wedding Matter Pro_`
+      `Please check the designer console for full card details.\n\n_Wedding Matter Pro_`
     );
     window.open(`https://wa.me/?text=${text}`, '_blank');
   };
 
   return (
     <div className="pt-12 max-w-2xl mx-auto">
-      {/* Success animation */}
       <motion.div initial={{ scale: 0, rotate: -180 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: 'spring', stiffness: 200, damping: 15 }}
         className="w-28 h-28 rounded-full mx-auto mb-6 flex items-center justify-center relative"
         style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})`, boxShadow: `0 20px 60px -10px ${c.primary}60` }}>
@@ -1466,32 +1627,26 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
             {form.bride.name} & {form.groom.name}
           </div>
         )}
-        <p className="text-sm" style={{ color: c.subtext }}>Your wedding matter has been sent to our designer 🌹</p>
+        <p className="text-sm" style={{ color: c.subtext }}>Your wedding matter is now with our designer 🌹</p>
       </motion.div>
 
       <Divider c={c} />
 
-      {/* Order ID */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.38 }}
         className="rounded-3xl border p-7 shadow-2xl mt-6 text-center"
         style={{ borderColor: c.border, background: c.surface, backdropFilter: 'blur(20px)' }}>
         <div className="text-[10px] uppercase tracking-[0.32em] mb-2 font-bold" style={{ color: c.subtext }}>Your Order ID</div>
         <div className="text-4xl font-bold tracking-[0.18em] font-mono" style={{ color: c.gold }}>{submitted.orderId}</div>
         <div className="text-xs mt-2" style={{ color: c.subtext }}>Submitted at {submitted.at}</div>
-        <div className="text-xs mt-1 font-semibold" style={{ color: c.subtext }}>Save this ID — mention it when following up with the designer</div>
+        <div className="text-xs mt-1 font-semibold" style={{ color: c.subtext }}>Save this ID — mention it when following up</div>
       </motion.div>
 
-      {/* Action buttons */}
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.46 }} className="grid grid-cols-2 gap-3 mt-4">
-        {/* WhatsApp Share */}
         <button onClick={shareWhatsApp}
           className="flex items-center justify-center gap-2.5 px-4 py-4 rounded-2xl text-white font-bold text-sm shadow-xl transition hover:opacity-90 active:scale-95"
           style={{ background: 'linear-gradient(135deg, #1DA851, #128C3E)', boxShadow: '0 12px 32px -8px #1DA85160' }}>
-          <MessageCircle className="w-5 h-5" />
-          Share on WhatsApp
+          <MessageCircle className="w-5 h-5" /> Share on WhatsApp
         </button>
-
-        {/* Copy export */}
         <button onClick={copy}
           className="flex items-center justify-center gap-2 px-4 py-4 rounded-2xl font-bold text-sm border-2 transition hover:opacity-80 active:scale-95"
           style={{ borderColor: c.gold, color: c.gold, background: `${c.gold}12` }}>
@@ -1499,7 +1654,6 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
         </button>
       </motion.div>
 
-      {/* CorelDRAW export block */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.54 }}
         className="rounded-3xl border p-5 mt-4" style={{ borderColor: c.border, background: c.surface }}>
         <div className="flex items-center justify-between mb-3">
@@ -1521,21 +1675,32 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
 }
 
 /* ─── Admin Dashboard ────────────────────────────────────────────────────── */
-function AdminDashboard({ c, dark }: { c: Palette; dark: boolean }) {
+function AdminDashboard({ c, dark, orders, setOrders }: { c: Palette; dark: boolean; orders: SubmittedOrder[]; setOrders: (o: SubmittedOrder[]) => void }) {
   const [filter, setFilter] = useState('All');
   const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState<typeof SAMPLE_ORDERS[0] | null>(null);
+  const [selected, setSelected] = useState<SubmittedOrder | null>(null);
 
-  const filtered = SAMPLE_ORDERS.filter(o =>
+  const filtered = orders.filter(o =>
     (filter === 'All' || o.status === filter) &&
-    (o.couple.toLowerCase().includes(search.toLowerCase()) || o.id.toLowerCase().includes(search.toLowerCase()))
+    (o.couple.toLowerCase().includes(search.toLowerCase()) || o.orderId.toLowerCase().includes(search.toLowerCase()))
   );
 
+  const updateStatus = (orderId: string, status: SubmittedOrder['status']) => {
+    const updated = orders.map(o => o.orderId === orderId ? { ...o, status } : o);
+    setOrders(updated);
+    if (selected?.orderId === orderId) setSelected(prev => prev ? { ...prev, status } : null);
+  };
+
+  const deleteOrder = (orderId: string) => {
+    setOrders(orders.filter(o => o.orderId !== orderId));
+    if (selected?.orderId === orderId) setSelected(null);
+  };
+
   const stats = [
-    { label: 'Total', value: SAMPLE_ORDERS.length, icon: Package, gradient: [c.gold, c.goldDeep] },
-    { label: 'New', value: SAMPLE_ORDERS.filter(o => o.status === 'New').length, icon: Bell, gradient: [c.primary, '#9C2C77'] },
-    { label: 'In Progress', value: SAMPLE_ORDERS.filter(o => o.status === 'In Progress').length, icon: Clock, gradient: ['#3B82F6', '#1D4ED8'] },
-    { label: 'Completed', value: SAMPLE_ORDERS.filter(o => o.status === 'Completed').length, icon: CheckCircle2, gradient: ['#16A34A', '#15803D'] },
+    { label: 'Total', value: orders.length, icon: Package, gradient: [c.gold, c.goldDeep] },
+    { label: 'New', value: orders.filter(o => o.status === 'New').length, icon: Bell, gradient: [c.primary, '#9C2C77'] },
+    { label: 'In Progress', value: orders.filter(o => o.status === 'In Progress').length, icon: Clock, gradient: ['#3B82F6', '#1D4ED8'] },
+    { label: 'Completed', value: orders.filter(o => o.status === 'Completed').length, icon: CheckCircle2, gradient: ['#16A34A', '#15803D'] },
   ];
 
   return (
@@ -1544,15 +1709,11 @@ function AdminDashboard({ c, dark }: { c: Palette; dark: boolean }) {
         <div>
           <div className="text-[10px] font-bold uppercase tracking-[0.3em] mb-1" style={{ color: c.gold }}>Designer Console</div>
           <h1 className="text-4xl sm:text-5xl font-medium leading-none" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
-            Welcome back, <em style={{ fontFamily: "'Tangerine', cursive", color: c.gold, fontSize: '1.3em' }}>Suresh</em>
+            Orders Dashboard
           </h1>
         </div>
-        <div className="flex items-center gap-3">
-          <button className="p-2.5 rounded-full border relative" style={{ borderColor: c.border }}>
-            <Bell className="w-4 h-4" />
-            <span className="absolute top-1 right-1 w-2 h-2 rounded-full" style={{ background: c.primary }} />
-          </button>
-          <div className="w-11 h-11 rounded-full flex items-center justify-center font-bold text-white" style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}>S</div>
+        <div className="text-xs font-semibold flex items-center gap-1.5 px-3 py-1.5 rounded-full" style={{ background: `${c.gold}12`, color: c.subtext }}>
+          <Save className="w-3.5 h-3.5" style={{ color: c.gold }} /> Auto-saved · {orders.length} order{orders.length !== 1 ? 's' : ''} stored
         </div>
       </div>
 
@@ -1560,7 +1721,8 @@ function AdminDashboard({ c, dark }: { c: Palette; dark: boolean }) {
         {stats.map(s => {
           const Icon = s.icon;
           return (
-            <motion.div key={s.label} whileHover={{ y: -4 }} className="rounded-3xl border p-5 shadow-xl relative overflow-hidden" style={{ borderColor: c.border, background: c.surface, backdropFilter: 'blur(20px)' }}>
+            <motion.div key={s.label} whileHover={{ y: -4 }} className="rounded-3xl border p-5 shadow-xl relative overflow-hidden"
+              style={{ borderColor: c.border, background: c.surface, backdropFilter: 'blur(20px)' }}>
               <div className="absolute -top-10 -right-10 w-24 h-24 rounded-full opacity-10" style={{ background: s.gradient[0] }} />
               <div className="relative">
                 <div className="flex items-center justify-between mb-3">
@@ -1583,7 +1745,7 @@ function AdminDashboard({ c, dark }: { c: Palette; dark: boolean }) {
             <Input c={c} className="pl-10" placeholder="Search couple name or order ID…" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
           <div className="flex gap-1.5 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
-            {['All', 'New', 'Pending', 'In Progress', 'Completed'].map(f => (
+            {['All', 'New', 'In Progress', 'Completed'].map(f => (
               <button key={f} onClick={() => setFilter(f)} className="px-4 py-2.5 rounded-full text-xs font-bold whitespace-nowrap transition-all"
                 style={{
                   background: filter === f ? `linear-gradient(135deg, ${c.primary}, ${c.gold})` : 'transparent',
@@ -1594,80 +1756,81 @@ function AdminDashboard({ c, dark }: { c: Palette; dark: boolean }) {
           </div>
         </div>
 
-        <div className="space-y-2">
-          {filtered.map((o, i) => (
-            <motion.div key={o.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.04 }}
-              whileHover={{ x: 4 }} onClick={() => setSelected(o)}
-              className="flex items-center justify-between p-4 rounded-2xl border cursor-pointer transition-all hover:shadow-lg"
-              style={{ borderColor: c.border, background: 'rgba(255,255,255,0.45)' }}>
-              <div className="flex items-center gap-4 min-w-0 flex-1">
-                <div className="w-12 h-12 rounded-full flex items-center justify-center shrink-0" style={{ background: `linear-gradient(135deg, ${c.primary}20, ${c.gold}28)` }}>
-                  <Heart className="w-5 h-5" style={{ color: c.gold }} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <div className="font-medium text-lg leading-none" style={{ fontFamily: "'Cormorant Garamond', serif", color: c.text }}>{o.couple}</div>
-                    <div className="text-[10px] font-mono px-2 py-0.5 rounded-full" style={{ background: `${c.gold}15`, color: c.gold }}>{o.id}</div>
+        {orders.length === 0 ? (
+          <div className="text-center py-20">
+            <div className="text-5xl mb-4">📭</div>
+            <div className="text-xl font-medium mb-2" style={{ fontFamily: "'Cormorant Garamond', serif", color: c.text }}>No orders yet</div>
+            <div className="text-sm" style={{ color: c.subtext }}>Orders submitted by customers will appear here instantly</div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {filtered.map((o, i) => (
+              <motion.div key={o.orderId} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.04 }}
+                whileHover={{ x: 4 }} onClick={() => setSelected(o)}
+                className="flex items-center justify-between p-4 rounded-2xl border cursor-pointer transition-all hover:shadow-lg"
+                style={{ borderColor: c.border, background: 'rgba(255,255,255,0.45)' }}>
+                <div className="flex items-center gap-4 min-w-0 flex-1">
+                  <div className="w-12 h-12 rounded-full flex items-center justify-center shrink-0" style={{ background: `linear-gradient(135deg, ${c.primary}20, ${c.gold}28)` }}>
+                    <Heart className="w-5 h-5" style={{ color: c.gold }} />
                   </div>
-                  <div className="text-[11px] mt-1 flex items-center gap-2 flex-wrap" style={{ color: c.subtext }}>
-                    <span>Template #{o.template}</span><span className="opacity-40">•</span>
-                    <span>{o.layout}</span><span className="opacity-40">•</span>
-                    <span>{o.font}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="font-medium text-lg leading-none" style={{ fontFamily: "'Cormorant Garamond', serif", color: c.text }}>{o.couple}</div>
+                      <div className="text-[10px] font-mono px-2 py-0.5 rounded-full" style={{ background: `${c.gold}15`, color: c.gold }}>{o.orderId}</div>
+                    </div>
+                    <div className="text-[11px] mt-1" style={{ color: c.subtext }}>{o.at}</div>
                   </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-3 shrink-0">
-                <StatusBadge s={o.status} c={c} />
-                <ChevronRight className="w-4 h-4 opacity-35 hidden sm:block" />
-              </div>
-            </motion.div>
-          ))}
-          {filtered.length === 0 && <div className="text-center py-14 text-sm" style={{ color: c.subtext }}>No orders match your filters</div>}
-        </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <StatusBadge s={o.status} c={c} />
+                  <ChevronRight className="w-4 h-4 opacity-35 hidden sm:block" />
+                </div>
+              </motion.div>
+            ))}
+            {filtered.length === 0 && orders.length > 0 && (
+              <div className="text-center py-14 text-sm" style={{ color: c.subtext }}>No orders match your filters</div>
+            )}
+          </div>
+        )}
       </div>
 
       <AnimatePresence>
-        {selected && <OrderModal order={selected} onClose={() => setSelected(null)} c={c} dark={dark} />}
+        {selected && (
+          <OrderModal order={selected} onClose={() => setSelected(null)} c={c} dark={dark}
+            onStatusChange={s => updateStatus(selected.orderId, s)}
+            onDelete={() => { deleteOrder(selected.orderId); setSelected(null); }} />
+        )}
       </AnimatePresence>
     </div>
   );
 }
 
 function StatusBadge({ s, c }: { s: string; c: Palette }) {
-  const map: Record<string, { bg: string; color: string; dot: string }> = {
-    'New': { bg: `${c.gold}20`, color: c.gold, dot: c.gold },
-    'Pending': { bg: `${c.primary}15`, color: c.primary, dot: c.primary },
-    'In Progress': { bg: 'rgba(59,130,246,0.15)', color: '#3B82F6', dot: '#3B82F6' },
-    'Completed': { bg: 'rgba(22,163,74,0.15)', color: '#16A34A', dot: '#16A34A' },
+  const map: Record<string, { bg: string; color: string }> = {
+    'New': { bg: `${c.gold}20`, color: c.gold },
+    'In Progress': { bg: 'rgba(59,130,246,0.15)', color: '#3B82F6' },
+    'Completed': { bg: 'rgba(22,163,74,0.15)', color: '#16A34A' },
   };
   const st = map[s] || map['New'];
   return (
     <span className="px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 shrink-0"
       style={{ background: st.bg, color: st.color }}>
-      <span className="w-1.5 h-1.5 rounded-full" style={{ background: st.dot }} /> {s}
+      <span className="w-1.5 h-1.5 rounded-full" style={{ background: st.color }} /> {s}
     </span>
   );
 }
 
-function OrderModal({ order, onClose, c, dark }: { order: typeof SAMPLE_ORDERS[0]; onClose: () => void; c: Palette; dark: boolean }) {
-  const [couple1, couple2] = order.couple.split(' & ');
-  const sample: FormState = {
-    ...initialForm,
-    bride: { name: couple1, salutation: 'Ms.', fatherName: 'Shri Rajesh', motherName: 'Smt Anjali', grandparents: '' },
-    groom: { name: couple2 || '', salutation: 'Mr.', fatherName: 'Shri Mahesh', motherName: 'Smt Sunita', grandparents: '' },
-    selectedTemplate: order.template,
-    deities: ['ganesh', 'shiva', 'sai', 'om', 'krishna', 'lakshmi'],
-    programmes: [
-      { id: 1, preset: 'wedding', name: 'Wedding Ceremony', date: order.date, time: '19:00', venue: 'Taj Palace', address: 'New Delhi', notes: '' }
-    ],
-    design: { ...initialForm.design, layout: order.layout.toLowerCase(), headingFont: FONTS.find(f => f.name === order.font)?.family || initialForm.design.headingFont }
-  };
-  const corel = generateCorelText(sample);
+function OrderModal({ order, onClose, c, dark, onStatusChange, onDelete }: {
+  order: SubmittedOrder; onClose: () => void; c: Palette; dark: boolean;
+  onStatusChange: (s: SubmittedOrder['status']) => void; onDelete: () => void;
+}) {
+  const corel = generateCorelText(order.form);
   const [copied, setCopied] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const copy = () => { navigator.clipboard?.writeText(corel); setCopied(true); setTimeout(() => setCopied(false), 1500); };
 
   const shareWhatsApp = () => {
-    const text = encodeURIComponent(`🌹 *Order ${order.id}*\n*Couple:* ${order.couple}\n*Status:* ${order.status}\n*Date:* ${order.date}\n*Layout:* ${order.layout}\n\n_Wedding Matter Pro Designer Console_`);
+    const text = encodeURIComponent(`🌹 *Order ${order.orderId}*\n*Couple:* ${order.couple}\n*Status:* ${order.status}\n*Submitted:* ${order.at}\n\n_Wedding Matter Pro_`);
     window.open(`https://wa.me/?text=${text}`, '_blank');
   };
 
@@ -1677,26 +1840,39 @@ function OrderModal({ order, onClose, c, dark }: { order: typeof SAMPLE_ORDERS[0
       <motion.div initial={{ scale: 0.9, y: 24 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9 }} onClick={e => e.stopPropagation()}
         className="relative w-full max-w-5xl max-h-[92vh] overflow-y-auto rounded-3xl shadow-2xl border"
         style={{ background: dark ? palette.dark.bg1 : palette.light.bg1, borderColor: c.border }}>
-        <div className="sticky top-0 z-10 backdrop-blur-xl p-5 sm:p-6 border-b flex items-center justify-between" style={{ borderColor: c.border, background: dark ? 'rgba(13,4,7,0.88)' : 'rgba(251,245,230,0.88)' }}>
-          <div>
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] mb-1" style={{ color: c.gold }}>{order.id} · {order.status}</div>
-            <h2 className="text-3xl font-medium" style={{ fontFamily: "'Cormorant Garamond', serif" }}>{order.couple}</h2>
+        <div className="sticky top-0 z-10 backdrop-blur-xl p-5 sm:p-6 border-b flex items-center justify-between gap-3"
+          style={{ borderColor: c.border, background: dark ? 'rgba(13,4,7,0.90)' : 'rgba(251,245,230,0.90)' }}>
+          <div className="min-w-0">
+            <div className="text-[10px] font-bold uppercase tracking-[0.25em] mb-1" style={{ color: c.gold }}>{order.orderId}</div>
+            <h2 className="text-2xl sm:text-3xl font-medium truncate" style={{ fontFamily: "'Cormorant Garamond', serif" }}>{order.couple}</h2>
+            <div className="text-xs mt-0.5" style={{ color: c.subtext }}>{order.at}</div>
           </div>
-          <button onClick={onClose} className="p-2.5 rounded-full border hover:scale-105 transition" style={{ borderColor: c.border }}><X className="w-4 h-4" /></button>
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Status changer */}
+            <Select c={c} className="text-[11px] !py-2" value={order.status} onChange={e => onStatusChange(e.target.value as SubmittedOrder['status'])}>
+              <option>New</option>
+              <option>In Progress</option>
+              <option>Completed</option>
+            </Select>
+            <button onClick={onClose} className="p-2.5 rounded-full border hover:scale-105 transition" style={{ borderColor: c.border }}><X className="w-4 h-4" /></button>
+          </div>
         </div>
+
         <div className="p-5 sm:p-6 grid lg:grid-cols-2 gap-6">
           <div>
             <div className="text-[10px] font-bold uppercase tracking-[0.25em] mb-3" style={{ color: c.gold }}>Card Preview</div>
-            <CardPreview form={sample} c={c} dark={dark} compact />
+            <CardPreview form={order.form} c={c} dark={dark} compact />
           </div>
           <div>
             <div className="flex items-center justify-between mb-3">
               <div className="text-[10px] font-bold uppercase tracking-[0.25em]" style={{ color: c.gold }}>CorelDRAW Export</div>
-              <button onClick={copy} className="flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-bold text-white" style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}>
+              <button onClick={copy} className="flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-bold text-white"
+                style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}>
                 {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied ? 'Copied' : 'Copy All'}
               </button>
             </div>
-            <pre className="text-[10px] whitespace-pre-wrap font-mono p-4 rounded-2xl border max-h-[380px] overflow-y-auto" style={{ borderColor: c.border, background: dark ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.65)' }}>
+            <pre className="text-[10px] whitespace-pre-wrap font-mono p-4 rounded-2xl border max-h-[360px] overflow-y-auto"
+              style={{ borderColor: c.border, background: dark ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.65)' }}>
               {corel}
             </pre>
             <div className="grid grid-cols-2 gap-2 mt-3">
@@ -1705,9 +1881,19 @@ function OrderModal({ order, onClose, c, dark }: { order: typeof SAMPLE_ORDERS[0
                 style={{ background: 'linear-gradient(135deg, #1DA851, #128C3E)' }}>
                 <MessageCircle className="w-4 h-4" /> WhatsApp
               </button>
-              <button className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-xs font-bold text-white" style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}>
-                <CheckCircle2 className="w-4 h-4" /> Mark Complete
-              </button>
+              {confirmDelete ? (
+                <button onClick={onDelete}
+                  className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-white text-xs font-bold"
+                  style={{ background: '#dc2626' }}>
+                  <Trash2 className="w-4 h-4" /> Confirm Delete
+                </button>
+              ) : (
+                <button onClick={() => setConfirmDelete(true)}
+                  className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-xs font-bold border"
+                  style={{ borderColor: '#dc262640', color: '#dc2626', background: '#dc262610' }}>
+                  <Trash2 className="w-4 h-4" /> Delete Order
+                </button>
+              )}
             </div>
           </div>
         </div>
