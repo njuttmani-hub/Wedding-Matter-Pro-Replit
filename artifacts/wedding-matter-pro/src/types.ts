@@ -16,13 +16,16 @@ export interface Palette {
 
 export interface PersonInfo {
   name: string;
-  namePrefix: string;          // e.g. "Kumari", "Shri" — user writes freely
+  // Salutations removed from bride/groom own name
   fatherName: string;
-  fatherPrefix: string;        // e.g. "Shri", "Late Shri"
+  fatherPrefix: string;       // Shri, Mr., etc.
   motherName: string;
-  motherPrefix: string;        // e.g. "Smt.", "Late Smt."
-  grandparents: string;
-  grandparentsPrefix: string;  // e.g. "Late Shri & Smt."
+  motherPrefix: string;       // Smt., Mrs., etc.
+  // Grandparents split into grandfather + grandmother
+  grandfatherName: string;
+  grandfatherPrefix: string;
+  grandmotherName: string;
+  grandmotherPrefix: string;
 }
 
 export interface Programme {
@@ -30,18 +33,18 @@ export interface Programme {
   preset: string;
   name: string;
   date: string;
-  time: string;
+  hour: string;    // 1–12
+  minute: string;  // 00, 05 … 55
+  ampm: 'AM' | 'PM';
   venue: string;
   address: string;
-  notes: string;
 }
 
 export interface FormState {
   bride: PersonInfo;
   groom: PersonInfo;
-  brideFirst: boolean;          // true = bride on top, false = groom on top
+  aboveWeds: 'bride' | 'groom';   // which name appears above the relation word
   family: {
-    surname: string;
     title: string;
     nativePlace: string;
     residenceAddress: string;
