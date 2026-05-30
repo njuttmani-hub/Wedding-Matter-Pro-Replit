@@ -92,6 +92,7 @@ export interface UploadOrderData {
   formPhotos: UploadedImage[];
   designPages: DesignPage[];
   notes: string;
+  generatedForm?: FormState;   // AI-generated matter preview (from photos)
 }
 
 export interface SubmittedOrder {

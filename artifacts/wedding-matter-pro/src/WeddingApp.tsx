@@ -10,6 +10,7 @@ import {
   Upload, Camera, Image as ImageIcon, ZoomIn
 } from 'lucide-react';
 import type { Palette, FormState, PersonInfo, Programme, SubmittedOrder, UploadedImage, DesignPage, UploadOrderData } from './types';
+import { useExtractMatter, type ExtractedMatter } from '@workspace/api-client-react';
 import {
   INVITATION_TEMPLATES, DEITIES, RELATION_WORDS, CLOSING_TAGS, KIDS_LINES,
   PROGRAMME_PRESETS, FONTS, CARD_SIZES, SALUTATIONS
@@ -137,6 +138,102 @@ const sampleForm: FormState = {
   ],
   withCompliments: 'Sharma & Mehta Families',
 };
+
+/* ─── AI matter → FormState mapper ───────────────────────────────────────── */
+function matchDeities(names: string[]): string[] {
+  const ids = new Set<string>();
+  for (const raw of names) {
+    const q = raw.toLowerCase();
+    const hit = DEITIES.find(d =>
+      q.includes(d.id) || d.name.toLowerCase().split(/\s+/).some(w => w.length > 2 && q.includes(w))
+    );
+    if (hit) ids.add(hit.id);
+  }
+  return ids.size ? [...ids] : ['ganesh'];
+}
+
+function matchLanguage(lang: string): string {
+  const q = (lang || '').toLowerCase();
+  if (q.includes('hindi')) return 'Hindi';
+  if (q.includes('marathi')) return 'Marathi';
+  if (q.includes('gujarati')) return 'Gujarati';
+  return 'English';
+}
+
+function matchRelationWord(word: string): string {
+  const q = (word || '').toLowerCase().trim();
+  const hit = RELATION_WORDS.find(r => r.id === q || r.label.toLowerCase() === q);
+  return hit ? hit.id : initialForm.relationWord;
+}
+
+function parseTime(time: string): { hour: string; minute: string; ampm: 'AM' | 'PM' } {
+  const m = (time || '').match(/(\d{1,2})[:.]?(\d{2})?\s*(am|pm)?/i);
+  if (!m) return { hour: '07', minute: '00', ampm: 'PM' };
+  let h = parseInt(m[1], 10);
+  const min = m[2] ?? '00';
+  let ap = (m[3] || '').toUpperCase();
+  if (!ap) { ap = h >= 12 ? 'PM' : 'AM'; }
+  if (h > 12) h -= 12;
+  if (h === 0) h = 12;
+  return { hour: String(h).padStart(2, '0'), minute: min.padStart(2, '0'), ampm: ap === 'AM' ? 'AM' : 'PM' };
+}
+
+function parseDate(date: string): string {
+  if (!date) return '';
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return '';
+  // Use local date parts (not toISOString) to avoid a timezone off-by-one shift.
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function matchPreset(name: string): string {
+  const q = (name || '').toLowerCase();
+  const hit = PROGRAMME_PRESETS.find(p => q.includes(p.id) || p.name.toLowerCase().split(/\s+/).some(w => w.length > 3 && q.includes(w)));
+  return hit ? hit.id : 'custom';
+}
+
+function mapExtractedToForm(ext: ExtractedMatter): FormState {
+  const person = (p: ExtractedMatter['bride'], fallbackName: string): PersonInfo => ({
+    ...emptyPerson(),
+    name: (p?.name || fallbackName || '').trim(),
+    fatherName: (p?.fatherName || '').trim(),
+    motherName: (p?.motherName || '').trim(),
+    grandfatherName: (p?.grandfatherName || '').trim(),
+    grandmotherName: (p?.grandmotherName || '').trim(),
+  });
+
+  const programmes: Programme[] = (ext.programmes || []).map((pr, i) => {
+    const t = parseTime(pr.time);
+    return {
+      id: Date.now() + i,
+      preset: matchPreset(pr.name),
+      name: (pr.name || 'Our Function').trim(),
+      date: parseDate(pr.date),
+      hour: t.hour, minute: t.minute, ampm: t.ampm,
+      venue: (pr.venue || '').trim(),
+      address: (pr.address || '').trim(),
+    };
+  });
+
+  return {
+    ...initialForm,
+    bride: person(ext.bride, ext.brideName),
+    groom: person(ext.groom, ext.groomName),
+    family: {
+      title: (ext.familyTitle || '').trim(),
+      nativePlace: (ext.nativePlace || '').trim(),
+      residenceAddress: (ext.residenceAddress || '').trim(),
+    },
+    deities: matchDeities(ext.deities || []),
+    relationWord: matchRelationWord(ext.relationWord),
+    programmes: programmes.length ? programmes : [emptyProgramme('wedding')],
+    withCompliments: (ext.familyTitle || '').trim(),
+    design: { ...initialForm.design, language: matchLanguage(ext.language) },
+  };
+}
 
 /* ─── Helpers ────────────────────────────────────────────────────────────── */
 function pn(prefix: string, name: string) {
@@ -1616,8 +1713,48 @@ function UploadFlow({ c, dark, addOrder, onBack }: { c: Palette; dark: boolean; 
   const [notes, setNotes] = useState('');
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null);
   const [submitted, setSubmitted] = useState<SubmittedOrder | null>(null);
+  const [generatedForm, setGeneratedForm] = useState<FormState | null>(null);
+  const extractMatter = useExtractMatter();
 
   const showToast = (msg: string, type = 'success') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3000); };
+
+  // The generated preview is built from the photos + commands. If the customer
+  // changes those inputs afterwards, the preview is stale — drop it so they
+  // don't submit matter that no longer matches their uploads.
+  const inputsKey = [
+    ...formPhotos.map(i => i.id),
+    ...designPages.map(p => `${p.id}:${p.command}`),
+  ].join('|');
+  useEffect(() => { setGeneratedForm(null); }, [inputsKey]);
+
+  const canGenerate = (formPhotos.length > 0 || designPages.length > 0) && !extractMatter.isPending;
+
+  const generatePreview = () => {
+    if (formPhotos.length === 0 && designPages.length === 0) {
+      showToast('Upload at least one form or design photo first.', 'error');
+      return;
+    }
+    extractMatter.mutate(
+      {
+        data: {
+          formPhotos: formPhotos.map(i => i.dataUrl),
+          designPages: designPages.map(p => ({ image: p.image.dataUrl, command: p.command })),
+        },
+      },
+      {
+        onSuccess: (res) => {
+          const form = mapExtractedToForm(res);
+          if (brideName.trim()) form.bride = { ...form.bride, name: brideName.trim() };
+          if (groomName.trim()) form.groom = { ...form.groom, name: groomName.trim() };
+          setGeneratedForm(form);
+          if (!brideName.trim() && form.bride.name) setBrideName(form.bride.name);
+          if (!groomName.trim() && form.groom.name) setGroomName(form.groom.name);
+          showToast('Preview generated! Review it below.');
+        },
+        onError: () => showToast('Could not read the photos. Please try again.', 'error'),
+      },
+    );
+  };
 
   const addDesignPages = (imgs: UploadedImage[]) => setDesignPages(prev => [...prev, ...imgs.map(image => ({ id: uid(), image, command: '' }))]);
   const removeDesignPage = (id: string) => setDesignPages(prev => prev.filter(p => p.id !== id));
@@ -1631,6 +1768,7 @@ function UploadFlow({ c, dark, addOrder, onBack }: { c: Palette; dark: boolean; 
     const upload: UploadOrderData = {
       brideName: brideName.trim(), groomName: groomName.trim(), contact: contact.trim(),
       formPhotos, designPages, notes: notes.trim(),
+      ...(generatedForm ? { generatedForm } : {}),
     };
     const order: SubmittedOrder = {
       orderId: `WMP-${Math.floor(2400 + Math.random() * 800)}`,
@@ -1757,6 +1895,37 @@ function UploadFlow({ c, dark, addOrder, onBack }: { c: Palette; dark: boolean; 
         <label className="text-[11px] font-bold uppercase tracking-[0.25em] mb-3 block" style={{ color: c.gold }}>Any Other Instructions</label>
         <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Fonts, colours, languages (Hindi / Marathi / Gujarati), anything else our designer should know…"
           className="w-full rounded-xl border px-4 py-3 text-sm font-medium outline-none resize-none" style={{ borderColor: c.border, background: dark ? 'rgba(255,255,255,0.04)' : '#fff', color: c.text }} />
+      </div>
+
+      {/* AI preview generation */}
+      <div className="rounded-3xl border p-6 shadow-lg mb-5" style={{ borderColor: c.gold, background: c.surface }}>
+        <div className="text-[11px] font-bold uppercase tracking-[0.25em] mb-2 flex items-center gap-2" style={{ color: c.gold }}>
+          <Zap className="w-3.5 h-3.5" /> Auto-Generate Preview
+        </div>
+        <p className="text-[13px] font-medium mb-4" style={{ color: c.subtext }}>
+          Let us read your form & design photos and instantly build a card preview from your matter. You can review it before submitting.
+        </p>
+        <button type="button" onClick={generatePreview} disabled={!canGenerate}
+          className="w-full flex items-center justify-center gap-2.5 px-6 py-3.5 rounded-2xl font-bold transition hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed border"
+          style={{ borderColor: c.gold, color: c.gold, background: dark ? 'rgba(255,255,255,0.03)' : `${c.gold}10` }}>
+          {extractMatter.isPending
+            ? <><Clock className="w-5 h-5 animate-spin" /> Reading your photos…</>
+            : <><Sparkles className="w-5 h-5" /> {generatedForm ? 'Regenerate Preview' : 'Generate Preview from Photos'}</>}
+        </button>
+
+        {generatedForm && (
+          <div className="mt-6">
+            <div className="text-[11px] font-bold uppercase tracking-[0.2em] mb-3 flex items-center gap-2" style={{ color: c.gold }}>
+              <Eye className="w-3.5 h-3.5" /> Generated Preview
+            </div>
+            <div className="rounded-2xl border overflow-hidden" style={{ borderColor: c.border }}>
+              <CardPreview form={generatedForm} c={c} dark={dark} compact />
+            </div>
+            <p className="text-[12px] font-medium mt-3 text-center" style={{ color: c.subtext }}>
+              This preview will be saved with your order so our designer sees your matter laid out. Not quite right? Edit the photos/commands and regenerate.
+            </p>
+          </div>
+        )}
       </div>
 
       <button onClick={submit} disabled={!canSubmit}
@@ -2022,6 +2191,20 @@ function OrderModal({ order, onClose, c, dark, cardSizeId, onStatusChange, onDel
                       <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/30 transition"><ZoomIn className="w-6 h-6 text-white opacity-0 group-hover:opacity-100 transition" /></div>
                     </button>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {order.upload.generatedForm && (
+              <div className="grid lg:grid-cols-2 gap-6">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.25em] mb-3 flex items-center gap-2" style={{ color: c.gold }}><Sparkles className="w-3.5 h-3.5" /> AI-Generated Matter Preview</div>
+                  <CardPreview form={order.upload.generatedForm} c={c} dark={dark} compact sizeId={cardSizeId} />
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.25em] mb-3" style={{ color: c.gold }}>CorelDRAW Export</div>
+                  <pre className="text-[10px] whitespace-pre-wrap font-mono p-4 rounded-2xl border max-h-[360px] overflow-y-auto"
+                    style={{ borderColor: c.border, background: dark ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.65)' }}>{generateCorelText(order.upload.generatedForm)}</pre>
                 </div>
               </div>
             )}

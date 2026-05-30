@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: wedding
+    description: Wedding Matter Pro operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,40 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /wedding/extract-matter:
+    post:
+      operationId: extractMatter
+      tags: [wedding]
+      summary: Extract wedding card matter from uploaded photos
+      description: >
+        Reads photos of a filled physical form plus card design pages (each with
+        a placement command) using AI vision, and returns structured wedding card
+        matter that can populate a card preview.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MatterExtractionInput"
+      responses:
+        "200":
+          description: Extracted matter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtractedMatter"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "502":
+          description: AI extraction failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +69,131 @@ components:
           type: string
       required:
         - status
+    ApiErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+    MatterExtractionDesignPage:
+      type: object
+      properties:
+        image:
+          type: string
+          description: Data URL (base64) of the card design page photo
+        command:
+          type: string
+          description: Customer note describing which matter goes on this page
+      required:
+        - image
+        - command
+    MatterExtractionInput:
+      type: object
+      properties:
+        formPhotos:
+          type: array
+          description: Data URLs (base64) of the filled physical form photos
+          items:
+            type: string
+        designPages:
+          type: array
+          description: Card design pages, each with its placement command
+          items:
+            $ref: "#/components/schemas/MatterExtractionDesignPage"
+      required:
+        - formPhotos
+        - designPages
+    ExtractedProgramme:
+      type: object
+      properties:
+        name:
+          type: string
+        date:
+          type: string
+          description: Date as written on the form (e.g. "Sunday, 14 Dec 2025")
+        time:
+          type: string
+          description: Time as written (e.g. "7:30 PM")
+        venue:
+          type: string
+        address:
+          type: string
+      required:
+        - name
+        - date
+        - time
+        - venue
+        - address
+    ExtractedPerson:
+      type: object
+      properties:
+        name:
+          type: string
+        fatherName:
+          type: string
+        motherName:
+          type: string
+        grandfatherName:
+          type: string
+        grandmotherName:
+          type: string
+      required:
+        - name
+        - fatherName
+        - motherName
+        - grandfatherName
+        - grandmotherName
+    ExtractedMatter:
+      type: object
+      properties:
+        brideName:
+          type: string
+        groomName:
+          type: string
+        bride:
+          $ref: "#/components/schemas/ExtractedPerson"
+        groom:
+          $ref: "#/components/schemas/ExtractedPerson"
+        familyTitle:
+          type: string
+          description: Hosting family name/title line
+        nativePlace:
+          type: string
+        residenceAddress:
+          type: string
+        deities:
+          type: array
+          items:
+            type: string
+        relationWord:
+          type: string
+          description: Relation word such as "weds", "विवाह", etc.
+        invitationText:
+          type: string
+          description: Main invitation body / blessing line if present
+        programmes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExtractedProgramme"
+        designNotes:
+          type: string
+          description: Summary of placement instructions across design pages
+        language:
+          type: string
+          description: Detected primary language/script (English, Hindi, Marathi, Gujarati)
+      required:
+        - brideName
+        - groomName
+        - bride
+        - groom
+        - familyTitle
+        - nativePlace
+        - residenceAddress
+        - deities
+        - relationWord
+        - invitationText
+        - programmes
+        - designNotes
+        - language
 
