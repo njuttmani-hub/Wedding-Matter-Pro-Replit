@@ -38,3 +38,4 @@ externalPort = 3000
 [userenv]
 
 [userenv.shared]
+OPENAI_API_KEY = "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"
