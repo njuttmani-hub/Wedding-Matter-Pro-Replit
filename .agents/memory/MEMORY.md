@@ -1,0 +1,1 @@
+- [Wedding Matter Pro storage](wedding-matter-pro-storage.md) — frontend-only app; all orders+photos live in localStorage (~5MB), so order saves must surface quota failures, never swallow them.

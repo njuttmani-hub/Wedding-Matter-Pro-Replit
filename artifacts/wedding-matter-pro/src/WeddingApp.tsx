@@ -6,9 +6,10 @@ import {
   Sun, Moon, LayoutDashboard, Clock, CheckCircle2, Edit3, X,
   Smartphone, Monitor, Printer, ArrowUp, ArrowDown, User, Package,
   Bell, Palette as PaletteIcon, Crown, Flame, Gem, Star, BookOpen,
-  MessageCircle, Zap, Info, ArrowLeftRight, CloudOff, Save, Maximize2
+  MessageCircle, Zap, Info, ArrowLeftRight, CloudOff, Save, Maximize2,
+  Upload, Camera, Image as ImageIcon, ZoomIn
 } from 'lucide-react';
-import type { Palette, FormState, PersonInfo, Programme, SubmittedOrder } from './types';
+import type { Palette, FormState, PersonInfo, Programme, SubmittedOrder, UploadedImage, DesignPage, UploadOrderData } from './types';
 import {
   INVITATION_TEMPLATES, DEITIES, RELATION_WORDS, CLOSING_TAGS, KIDS_LINES,
   PROGRAMME_PRESETS, FONTS, CARD_SIZES, SALUTATIONS
@@ -221,28 +222,41 @@ function loadDraft(): FormState {
 function loadOrders(): SubmittedOrder[] {
   try {
     const raw = localStorage.getItem(ORDERS_KEY);
-    if (raw) return JSON.parse(raw) as SubmittedOrder[];
+    if (raw) {
+      const parsed = JSON.parse(raw) as SubmittedOrder[];
+      // Migrate legacy orders that predate the `mode` discriminator
+      return parsed.map(o => o.mode ? o : { ...o, mode: 'type' as const });
+    }
   } catch { /* ignore */ }
   return [];
 }
 
-function saveOrders(orders: SubmittedOrder[]) {
-  try { localStorage.setItem(ORDERS_KEY, JSON.stringify(orders)); } catch { /* ignore */ }
+// Returns true on success, false if persistence failed (e.g. localStorage quota exceeded)
+function saveOrders(orders: SubmittedOrder[]): boolean {
+  try {
+    localStorage.setItem(ORDERS_KEY, JSON.stringify(orders));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /* ─── Root App ───────────────────────────────────────────────────────────── */
 export default function WeddingApp() {
   const [mode, setMode] = useState<'customer' | 'admin'>('customer');
+  const [inputMode, setInputMode] = useState<'choose' | 'type' | 'upload'>('choose');
   const [dark, setDark] = useState(false);
   const [orders, setOrders] = useState<SubmittedOrder[]>(() => loadOrders());
   const c = dark ? palette.dark : palette.light;
 
-  const addOrder = useCallback((order: SubmittedOrder) => {
-    setOrders(prev => {
-      const next = [order, ...prev];
-      saveOrders(next);
-      return next;
-    });
+  const ordersRef = React.useRef(orders);
+  useEffect(() => { ordersRef.current = orders; }, [orders]);
+
+  const addOrder = useCallback((order: SubmittedOrder): boolean => {
+    const next = [order, ...ordersRef.current];
+    if (!saveOrders(next)) return false;   // persistence failed — don't update UI
+    setOrders(next);
+    return true;
   }, []);
 
   useEffect(() => {
@@ -261,9 +275,19 @@ export default function WeddingApp() {
       <main className="relative z-10 max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 pb-32 pt-6">
         <AnimatePresence mode="wait">
           {mode === 'customer' ? (
-            <motion.div key="c" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35 }}>
-              <CustomerFlow c={c} dark={dark} addOrder={addOrder} />
-            </motion.div>
+            inputMode === 'choose' ? (
+              <motion.div key="choose" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35 }}>
+                <ModeChooser c={c} onPick={setInputMode} />
+              </motion.div>
+            ) : inputMode === 'type' ? (
+              <motion.div key="c" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35 }}>
+                <CustomerFlow c={c} dark={dark} addOrder={addOrder} onBack={() => setInputMode('choose')} />
+              </motion.div>
+            ) : (
+              <motion.div key="u" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35 }}>
+                <UploadFlow c={c} dark={dark} addOrder={addOrder} onBack={() => setInputMode('choose')} />
+              </motion.div>
+            )
           ) : (
             <motion.div key="a" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35 }}>
               <AdminDashboard c={c} dark={dark} orders={orders} setOrders={o => { setOrders(o); saveOrders(o); }} />
@@ -328,7 +352,7 @@ function Nav({ mode, setMode, dark, setDark, c, orderCount }: { mode: string; se
 }
 
 /* ─── Customer Flow ──────────────────────────────────────────────────────── */
-function CustomerFlow({ c, dark, addOrder }: { c: Palette; dark: boolean; addOrder: (o: SubmittedOrder) => void }) {
+function CustomerFlow({ c, dark, addOrder, onBack }: { c: Palette; dark: boolean; addOrder: (o: SubmittedOrder) => boolean; onBack?: () => void }) {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<FormState>(() => loadDraft());
   const [submitted, setSubmitted] = useState<SubmittedOrder | null>(null);
@@ -385,10 +409,11 @@ function CustomerFlow({ c, dark, addOrder }: { c: Palette; dark: boolean; addOrd
       orderId: `WMP-${Math.floor(2400 + Math.random() * 800)}`,
       at: new Date().toLocaleString(),
       couple: `${form.bride.name}${form.groom.name ? ` & ${form.groom.name}` : ''}`,
+      mode: 'type',
       form: JSON.parse(JSON.stringify(form)),
       status: 'New',
     };
-    addOrder(order);
+    if (!addOrder(order)) { showToast('Could not save — your device storage is full. Please clear some space and try again.', 'error'); return; }
     setSubmitted(order);
     try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
   };
@@ -399,6 +424,11 @@ function CustomerFlow({ c, dark, addOrder }: { c: Palette; dark: boolean; addOrd
 
   return (
     <div className="pt-4 sm:pt-6">
+      {onBack && (
+        <button onClick={onBack} className="mb-4 inline-flex items-center gap-1.5 text-[12px] font-bold rounded-full px-3 py-1.5 border transition-all hover:scale-105" style={{ borderColor: c.border, color: c.subtext, background: c.surface }}>
+          <ChevronLeft className="w-3.5 h-3.5" /> Change method
+        </button>
+      )}
       <Hero c={c} onFillSample={fillSample} onClear={clearDraft} hasDraft={JSON.stringify(form) !== JSON.stringify(initialForm)} />
       <Stepper step={step} setStep={setStep} c={c} dark={dark} saving={saving} offline={offline} />
 
@@ -1234,29 +1264,25 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
     ? { aspectRatio: `${sizeConf.widthIn} / ${sizeConf.heightIn}` }
     : {};
 
-  // Brown/warm card backgrounds — #10
-  const cardBg = layout === 'modern'
-    ? 'linear-gradient(180deg, #F5EDD8 0%, #E8D5A8 100%)'
-    : layout === 'traditional'
-    ? 'linear-gradient(180deg, #EDD9A3 0%, #C8A456 100%)'
-    : 'linear-gradient(180deg, #F0DCA8 0%, #C8952A 50%, #F0DCA8 100%)';
+  // White card background for maximum legibility
+  const cardBg = '#FFFFFF';
 
   if (!hasNames && compact) {
     return (
       <div className="rounded-2xl flex flex-col items-center justify-center py-10 px-6 text-center" style={{ background: cardBg, minHeight: 200 }}>
         <div className="text-4xl mb-3 opacity-40">💌</div>
-        <div className="font-semibold" style={{ color: '#5A2D0C', fontFamily: "'Cormorant Garamond', serif", fontSize: '1.2rem' }}>Your card preview</div>
-        <div className="text-xs mt-1.5 font-medium" style={{ color: '#5A2D0C', opacity: 0.6 }}>Enter bride & groom names to see it come to life</div>
+        <div className="font-semibold" style={{ color: '#1A1A1A', fontFamily: "'Cormorant Garamond', serif", fontSize: '1.2rem' }}>Your card preview</div>
+        <div className="text-xs mt-1.5 font-medium" style={{ color: '#1A1A1A', opacity: 0.6 }}>Enter bride & groom names to see it come to life</div>
       </div>
     );
   }
 
   return (
-    <div className="rounded-2xl overflow-hidden shadow-2xl relative" style={{ background: cardBg, color: '#2A0E14', ...aspectStyle }}>
+    <div className="rounded-2xl overflow-hidden shadow-2xl relative" style={{ background: cardBg, color: '#111111', ...aspectStyle }}>
       {/* Ornate borders */}
       {layout !== 'modern' && (
         <>
-          <div className="absolute inset-2.5 rounded-xl pointer-events-none" style={{ border: '2px double #7B4A10', opacity: 0.6 }} />
+          <div className="absolute inset-2.5 rounded-xl pointer-events-none" style={{ border: '2px double #C0892E', opacity: 0.5 }} />
           <div className="absolute inset-4 rounded-lg pointer-events-none" style={{ border: '1px solid #C0892E', opacity: 0.5 }} />
         </>
       )}
@@ -1267,14 +1293,14 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
 
         {/* Deities */}
         {form.deities.length > 0 && (
-          <div className="mb-3 px-2 py-2 rounded-lg" style={{ background: 'rgba(90, 45, 12, 0.08)', border: '1px dashed rgba(192, 137, 46, 0.55)' }}>
+          <div className="mb-3 px-2 py-2 rounded-lg" style={{ background: 'rgba(0, 0, 0, 0.03)', border: '1px dashed rgba(192, 137, 46, 0.55)' }}>
             <div className="flex items-center justify-around gap-1 flex-wrap">
               {form.deities.map(id => { const d = DEITIES.find(x => x.id === id); return <div key={id} className="text-xl sm:text-2xl" title={d?.name}>{d?.glyph}</div>; })}
             </div>
           </div>
         )}
         {form.deities[0] && (
-          <div className="text-[9px] uppercase tracking-[0.35em] mb-3 font-bold" style={{ color: '#5A2D0C', fontFamily: form.design.headingFont }}>
+          <div className="text-[9px] uppercase tracking-[0.35em] mb-3 font-bold" style={{ color: '#1A1A1A', fontFamily: form.design.headingFont }}>
             {DEITIES.find(d => d.id === form.deities[0])?.mantra}
           </div>
         )}
@@ -1283,7 +1309,7 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
 
         {/* Host parents line — show exactly as typed */}
         {form.hostType === 'parents' && (above.fatherName || above.motherName || below.fatherName || below.motherName) && (
-          <div className="text-[11px] mb-2 font-semibold" style={{ color: '#5A2D0C' }}>
+          <div className="text-[11px] mb-2 font-semibold" style={{ color: '#1A1A1A' }}>
             {pn(above.motherPrefix, above.motherName) || pn(below.motherPrefix, below.motherName) || ''}
             {((above.motherName || below.motherName) && (above.fatherName || below.fatherName)) ? ' & ' : ''}
             {pn(above.fatherPrefix, above.fatherName) || pn(below.fatherPrefix, below.fatherName) || ''}
@@ -1300,7 +1326,7 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
         {/* Names — no BRIDE / GROOM labels (#9) */}
         <div className="my-5">
           {/* Above Weds */}
-          <div className="font-medium leading-tight mb-1" style={{ fontFamily: form.design.headingFont, fontSize: compact ? '1.7em' : '2.5em', color: '#2A0E14' }}>
+          <div className="font-medium leading-tight mb-1" style={{ fontFamily: form.design.headingFont, fontSize: compact ? '1.7em' : '2.5em', color: '#111111' }}>
             {above.name || <span className="opacity-30 italic" style={{ fontSize: '0.7em' }}>Name</span>}
           </div>
           {(above.fatherName || above.motherName) && (
@@ -1314,14 +1340,14 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
 
           {/* Relation word */}
           <div className="my-4 relative">
-            <div style={{ fontFamily: form.design.scriptFont || "'Tangerine', cursive", fontSize: compact ? '2.2em' : '3.2em', color: '#8B4513', lineHeight: 0.9 }}>
+            <div style={{ fontFamily: form.design.scriptFont || "'Tangerine', cursive", fontSize: compact ? '2.2em' : '3.2em', color: '#1A1A1A', lineHeight: 0.9 }}>
               {relation?.label || 'Weds'}
             </div>
             <div className="absolute left-1/2 -translate-x-1/2 -bottom-1 w-14 h-px" style={{ background: '#C0892E' }} />
           </div>
 
           {/* Below Weds */}
-          <div className="font-medium leading-tight mb-1 mt-2" style={{ fontFamily: form.design.headingFont, fontSize: compact ? '1.7em' : '2.5em', color: '#2A0E14' }}>
+          <div className="font-medium leading-tight mb-1 mt-2" style={{ fontFamily: form.design.headingFont, fontSize: compact ? '1.7em' : '2.5em', color: '#111111' }}>
             {below.name || <span className="opacity-30 italic" style={{ fontSize: '0.7em' }}>Name</span>}
           </div>
           {(below.fatherName || below.motherName) && (
@@ -1336,9 +1362,9 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
 
         {/* Programmes */}
         {form.programmes.some(p => p.date) && (
-          <div className="mt-6 pt-4" style={{ borderTop: '1px solid rgba(90, 45, 12, 0.22)' }}>
+          <div className="mt-6 pt-4" style={{ borderTop: '1px solid rgba(0, 0, 0, 0.12)' }}>
             <DecorativeDivider compact={compact} mini />
-            <div className="text-[10px] font-bold mb-3 mt-2" style={{ color: '#5A2D0C', letterSpacing: '0.4em', fontFamily: form.design.headingFont }}>◈ PROGRAMMES ◈</div>
+            <div className="text-[10px] font-bold mb-3 mt-2" style={{ color: '#1A1A1A', letterSpacing: '0.4em', fontFamily: form.design.headingFont }}>◈ PROGRAMMES ◈</div>
             <div className="grid gap-2">
               {form.programmes.filter(f => f.date).map(f => {
                 const preset = PROGRAMME_PRESETS.find(p => p.id === f.preset);
@@ -1347,12 +1373,12 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
                     <div className="flex items-start gap-2">
                       <div className="text-lg shrink-0">{preset?.icon || '✨'}</div>
                       <div className="flex-1 min-w-0">
-                        <div className="font-bold leading-tight" style={{ fontFamily: form.design.headingFont, fontSize: '1em', color: '#5A2D0C' }}>{f.name}</div>
+                        <div className="font-bold leading-tight" style={{ fontFamily: form.design.headingFont, fontSize: '1em', color: '#1A1A1A' }}>{f.name}</div>
                         <div className="text-[10px] mt-0.5 font-semibold">
                           {new Date(f.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
                           {f.hour ? <span className="opacity-65"> · {fmtTime(f.hour, f.minute, f.ampm)}</span> : null}
                         </div>
-                        {f.venue && <div className="text-[10px] font-bold mt-0.5" style={{ color: '#5A2D0C' }}>{f.venue}</div>}
+                        {f.venue && <div className="text-[10px] font-bold mt-0.5" style={{ color: '#1A1A1A' }}>{f.venue}</div>}
                         {f.address && <div className="text-[10px] opacity-65 mt-0.5 leading-tight">{f.address}</div>}
                       </div>
                     </div>
@@ -1364,24 +1390,24 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
         )}
 
         {form.family.residenceAddress && (
-          <div className="mt-5 pt-4 text-[10px]" style={{ borderTop: '1px solid rgba(90, 45, 12, 0.18)' }}>
-            <div className="font-bold mb-0.5" style={{ color: '#5A2D0C' }}>Residence:</div>
+          <div className="mt-5 pt-4 text-[10px]" style={{ borderTop: '1px solid rgba(0, 0, 0, 0.10)' }}>
+            <div className="font-bold mb-0.5" style={{ color: '#1A1A1A' }}>Residence:</div>
             <div className="opacity-65">{form.family.residenceAddress}</div>
           </div>
         )}
         {form.withCompliments && (
           <div className="mt-3 text-[10px]">
-            <div className="font-bold mb-0.5" style={{ color: '#5A2D0C' }}>With Best Compliments:</div>
+            <div className="font-bold mb-0.5" style={{ color: '#1A1A1A' }}>With Best Compliments:</div>
             <div className="opacity-65">{form.withCompliments}</div>
           </div>
         )}
         {kidsLine && (
           <div className="mt-4 px-3 py-2 rounded-lg" style={{ background: 'rgba(192, 137, 46, 0.12)' }}>
-            <div className="text-[10px] italic font-medium" style={{ color: '#5A2D0C' }}>{kidsLine.label}</div>
+            <div className="text-[10px] italic font-medium" style={{ color: '#1A1A1A' }}>{kidsLine.label}</div>
           </div>
         )}
         {closing && (
-          <div className="mt-4 text-[10px] font-bold tracking-[0.28em]" style={{ color: '#5A2D0C' }}>✦ {closing.label.toUpperCase()} ✦</div>
+          <div className="mt-4 text-[10px] font-bold tracking-[0.28em]" style={{ color: '#1A1A1A' }}>✦ {closing.label.toUpperCase()} ✦</div>
         )}
         <div className="mt-4 flex justify-center">
           <svg width="40" height="12" viewBox="0 0 40 12" fill="#C0892E" opacity="0.6">
@@ -1455,6 +1481,296 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
       </motion.div>
       <button onClick={onReset} className="mt-5 mx-auto flex items-center gap-2 px-6 py-3 rounded-full border text-sm font-semibold transition hover:opacity-80"
         style={{ borderColor: c.border, color: c.text }}>Submit Another Order</button>
+    </div>
+  );
+}
+
+/* ─── Image helpers ──────────────────────────────────────────────────────── */
+function compressImage(file: File, maxDim = 1500, quality = 0.72): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new window.Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > height && width > maxDim) { height = Math.round(height * maxDim / width); width = maxDim; }
+        else if (height >= width && height > maxDim) { width = Math.round(width * maxDim / height); height = maxDim; }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { reject(new Error('Canvas not supported')); return; }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = () => reject(new Error('Could not read image'));
+      img.src = reader.result as string;
+    };
+    reader.onerror = () => reject(new Error('Could not read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+const uid = () => Math.random().toString(36).slice(2, 10);
+
+/* ─── Mode Chooser ───────────────────────────────────────────────────────── */
+function ModeChooser({ c, onPick }: { c: Palette; onPick: (m: 'type' | 'upload') => void }) {
+  const cards = [
+    { id: 'type' as const, icon: Type, title: 'Type My Matter', tag: 'Guided 8-step wizard', desc: 'Fill an easy step-by-step form. See your card preview update live as you type, then submit.', grad: `linear-gradient(135deg, ${c.primary}, ${c.gold})` },
+    { id: 'upload' as const, icon: Camera, title: 'Upload Form & Design', tag: 'Already filled on paper?', desc: 'Snap photos of your filled physical form and your card design pages. Tell us which matter goes on which page — we handle the rest.', grad: `linear-gradient(135deg, ${c.gold}, ${c.accent})` },
+  ];
+  return (
+    <div className="pt-8 sm:pt-12 max-w-4xl mx-auto">
+      <div className="text-center mb-10">
+        <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border mb-5 text-[11px] font-bold uppercase tracking-[0.25em]" style={{ borderColor: c.border, color: c.gold, background: c.surface }}>
+          <Sparkles className="w-3.5 h-3.5" /> Wedding Matter Pro
+        </div>
+        <h1 className="font-medium mb-3" style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '2.8rem', lineHeight: 1.05, color: c.text }}>
+          How would you like to <em style={{ fontFamily: "'Tangerine', cursive", color: c.gold, fontSize: '1.2em' }}>give us your matter?</em>
+        </h1>
+        <p className="text-base font-medium max-w-xl mx-auto" style={{ color: c.subtext }}>Choose to type your details in our guided wizard, or simply upload photos of a filled form and your card design.</p>
+      </div>
+      <div className="grid sm:grid-cols-2 gap-5">
+        {cards.map(card => (
+          <motion.button key={card.id} onClick={() => onPick(card.id)} whileHover={{ y: -6 }} whileTap={{ scale: 0.98 }}
+            className="text-left rounded-3xl border p-7 shadow-xl transition-all relative overflow-hidden group" style={{ borderColor: c.border, background: c.surface }}>
+            <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-5 shadow-lg" style={{ background: card.grad }}>
+              <card.icon className="w-8 h-8 text-white" />
+            </div>
+            <div className="text-[11px] font-bold uppercase tracking-[0.2em] mb-1.5" style={{ color: c.gold }}>{card.tag}</div>
+            <h2 className="font-bold mb-2" style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '1.8rem', color: c.text }}>{card.title}</h2>
+            <p className="text-sm font-medium leading-relaxed" style={{ color: c.subtext }}>{card.desc}</p>
+            <div className="mt-5 inline-flex items-center gap-1.5 text-sm font-bold" style={{ color: c.gold }}>
+              Continue <ChevronRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
+            </div>
+          </motion.button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Image Uploader ─────────────────────────────────────────────────────── */
+function ImageUploader({ c, label, hint, images, onAdd, onRemove }: {
+  c: Palette; label: string; hint: string; images: UploadedImage[];
+  onAdd: (imgs: UploadedImage[]) => void; onRemove: (id: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  const handleFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setBusy(true);
+    const added: UploadedImage[] = [];
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith('image/')) continue;
+      try {
+        const dataUrl = await compressImage(file);
+        added.push({ id: uid(), dataUrl, name: file.name });
+      } catch { /* skip bad file */ }
+    }
+    if (added.length) onAdd(added);
+    setBusy(false);
+    if (inputRef.current) inputRef.current.value = '';
+  };
+
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-2">
+        <label className="text-sm font-bold" style={{ color: c.text }}>{label}</label>
+        <span className="text-[11px] font-medium" style={{ color: c.subtext }}>{images.length} added</span>
+      </div>
+      <p className="text-[12px] font-medium mb-3" style={{ color: c.subtext }}>{hint}</p>
+      <button type="button" onClick={() => inputRef.current?.click()} disabled={busy}
+        className="w-full rounded-2xl border-2 border-dashed py-7 px-4 flex flex-col items-center justify-center gap-2 transition hover:opacity-80"
+        style={{ borderColor: c.gold, background: `${c.gold}0D`, opacity: busy ? 0.6 : 1 }}>
+        <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}>
+          <Upload className="w-5 h-5 text-white" />
+        </div>
+        <div className="text-sm font-bold" style={{ color: c.text }}>{busy ? 'Processing…' : 'Tap to upload photos'}</div>
+        <div className="text-[11px] font-medium" style={{ color: c.subtext }}>JPG / PNG · take a clear, well-lit photo</div>
+      </button>
+      <input ref={inputRef} type="file" accept="image/*" multiple className="hidden" onChange={e => handleFiles(e.target.files)} />
+      {images.length > 0 && (
+        <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 mt-4">
+          {images.map(img => (
+            <div key={img.id} className="relative group rounded-xl overflow-hidden border" style={{ borderColor: c.border }}>
+              <img src={img.dataUrl} alt={img.name} className="w-full h-24 object-cover" />
+              <button type="button" onClick={() => onRemove(img.id)} className="absolute top-1 right-1 w-6 h-6 rounded-full flex items-center justify-center text-white shadow-lg" style={{ background: c.accent }}>
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Upload Flow ────────────────────────────────────────────────────────── */
+function UploadFlow({ c, dark, addOrder, onBack }: { c: Palette; dark: boolean; addOrder: (o: SubmittedOrder) => boolean; onBack: () => void }) {
+  const [brideName, setBrideName] = useState('');
+  const [groomName, setGroomName] = useState('');
+  const [contact, setContact] = useState('');
+  const [formPhotos, setFormPhotos] = useState<UploadedImage[]>([]);
+  const [designPages, setDesignPages] = useState<DesignPage[]>([]);
+  const [notes, setNotes] = useState('');
+  const [toast, setToast] = useState<{ msg: string; type: string } | null>(null);
+  const [submitted, setSubmitted] = useState<SubmittedOrder | null>(null);
+
+  const showToast = (msg: string, type = 'success') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3000); };
+
+  const addDesignPages = (imgs: UploadedImage[]) => setDesignPages(prev => [...prev, ...imgs.map(image => ({ id: uid(), image, command: '' }))]);
+  const removeDesignPage = (id: string) => setDesignPages(prev => prev.filter(p => p.id !== id));
+  const setCommand = (id: string, command: string) => setDesignPages(prev => prev.map(p => p.id === id ? { ...p, command } : p));
+
+  const canSubmit = brideName.trim() && groomName.trim() && (formPhotos.length > 0 || designPages.length > 0);
+
+  const submit = () => {
+    if (!brideName.trim() || !groomName.trim()) { showToast('Please enter bride & groom names.', 'error'); return; }
+    if (formPhotos.length === 0 && designPages.length === 0) { showToast('Please upload at least one photo of your form or design.', 'error'); return; }
+    const upload: UploadOrderData = {
+      brideName: brideName.trim(), groomName: groomName.trim(), contact: contact.trim(),
+      formPhotos, designPages, notes: notes.trim(),
+    };
+    const order: SubmittedOrder = {
+      orderId: `WMP-${Math.floor(2400 + Math.random() * 800)}`,
+      at: new Date().toLocaleString(),
+      couple: `${brideName.trim()} & ${groomName.trim()}`,
+      mode: 'upload',
+      upload,
+      status: 'New',
+    };
+    if (!addOrder(order)) {
+      showToast('Storage is full — please remove a few photos and try again.', 'error');
+      return;
+    }
+    setSubmitted(order);
+  };
+
+  if (submitted) {
+    return (
+      <div className="pt-12 max-w-2xl mx-auto text-center">
+        <motion.div initial={{ scale: 0, rotate: -180 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: 'spring', stiffness: 200, damping: 15 }}
+          className="w-28 h-28 rounded-full mx-auto mb-6 flex items-center justify-center" style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})`, boxShadow: `0 20px 60px -10px ${c.primary}60` }}>
+          <Check className="w-14 h-14 text-white" strokeWidth={3} />
+        </motion.div>
+        <h1 className="font-medium mb-2" style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '3rem' }}>
+          Photos <em style={{ fontFamily: "'Tangerine', cursive", color: c.gold, fontSize: '1.25em', lineHeight: 0.8 }}>received!</em>
+        </h1>
+        <div className="text-2xl mb-2" style={{ fontFamily: "'Tangerine', cursive", color: c.gold }}>{submitted.couple}</div>
+        <p className="text-base font-medium" style={{ color: c.subtext }}>Our designer has your form & design with your page instructions 🌹</p>
+        <div className="rounded-3xl border p-7 shadow-2xl mt-8 text-center" style={{ borderColor: c.border, background: c.surface }}>
+          <div className="text-xs uppercase tracking-[0.32em] mb-2 font-bold" style={{ color: c.subtext }}>Your Order ID</div>
+          <div className="text-4xl font-bold tracking-[0.18em] font-mono" style={{ color: c.gold }}>{submitted.orderId}</div>
+          <div className="text-sm mt-2 font-medium" style={{ color: c.subtext }}>Submitted at {submitted.at}</div>
+        </div>
+        <button onClick={onBack} className="mt-6 mx-auto flex items-center gap-2 px-6 py-3 rounded-full border text-sm font-semibold transition hover:opacity-80" style={{ borderColor: c.border, color: c.text }}>
+          Submit Another Order
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="pt-4 sm:pt-6 max-w-3xl mx-auto">
+      <button onClick={onBack} className="mb-4 inline-flex items-center gap-1.5 text-[12px] font-bold rounded-full px-3 py-1.5 border transition-all hover:scale-105" style={{ borderColor: c.border, color: c.subtext, background: c.surface }}>
+        <ChevronLeft className="w-3.5 h-3.5" /> Change method
+      </button>
+
+      <div className="text-center mb-8">
+        <div className="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center mb-4 shadow-lg" style={{ background: `linear-gradient(135deg, ${c.gold}, ${c.accent})` }}>
+          <Camera className="w-8 h-8 text-white" />
+        </div>
+        <h1 className="font-medium mb-2" style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '2.4rem', color: c.text }}>Upload Your Form & Design</h1>
+        <p className="text-sm font-medium max-w-lg mx-auto" style={{ color: c.subtext }}>Photograph your filled physical form and each page of your card design. Add a short note on each design page telling us exactly which matter goes there.</p>
+      </div>
+
+      {/* Couple + contact */}
+      <div className="rounded-3xl border p-6 shadow-lg mb-5" style={{ borderColor: c.border, background: c.surface }}>
+        <div className="text-[11px] font-bold uppercase tracking-[0.25em] mb-4" style={{ color: c.gold }}>Couple Details</div>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div>
+            <label className="text-sm font-bold block mb-1.5" style={{ color: c.text }}>Bride's Name *</label>
+            <input value={brideName} onChange={e => setBrideName(e.target.value)} placeholder="e.g. Priya"
+              className="w-full rounded-xl border px-4 py-3 text-sm font-medium outline-none transition" style={{ borderColor: c.border, background: dark ? 'rgba(255,255,255,0.04)' : '#fff', color: c.text }} />
+          </div>
+          <div>
+            <label className="text-sm font-bold block mb-1.5" style={{ color: c.text }}>Groom's Name *</label>
+            <input value={groomName} onChange={e => setGroomName(e.target.value)} placeholder="e.g. Rohan"
+              className="w-full rounded-xl border px-4 py-3 text-sm font-medium outline-none transition" style={{ borderColor: c.border, background: dark ? 'rgba(255,255,255,0.04)' : '#fff', color: c.text }} />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="text-sm font-bold block mb-1.5" style={{ color: c.text }}>Contact Number <span className="font-medium opacity-60">(optional)</span></label>
+            <input value={contact} onChange={e => setContact(e.target.value)} placeholder="WhatsApp / phone number"
+              className="w-full rounded-xl border px-4 py-3 text-sm font-medium outline-none transition" style={{ borderColor: c.border, background: dark ? 'rgba(255,255,255,0.04)' : '#fff', color: c.text }} />
+          </div>
+        </div>
+      </div>
+
+      {/* Filled form photos */}
+      <div className="rounded-3xl border p-6 shadow-lg mb-5" style={{ borderColor: c.border, background: c.surface }}>
+        <div className="text-[11px] font-bold uppercase tracking-[0.25em] mb-4 flex items-center gap-2" style={{ color: c.gold }}>
+          <FileText className="w-3.5 h-3.5" /> Filled Physical Form
+        </div>
+        <ImageUploader c={c} label="Photos of your filled form"
+          hint="Upload clear photos of every page of the form you filled by hand."
+          images={formPhotos}
+          onAdd={imgs => setFormPhotos(prev => [...prev, ...imgs])}
+          onRemove={id => setFormPhotos(prev => prev.filter(i => i.id !== id))} />
+      </div>
+
+      {/* Design pages + commands */}
+      <div className="rounded-3xl border p-6 shadow-lg mb-5" style={{ borderColor: c.border, background: c.surface }}>
+        <div className="text-[11px] font-bold uppercase tracking-[0.25em] mb-4 flex items-center gap-2" style={{ color: c.gold }}>
+          <ImageIcon className="w-3.5 h-3.5" /> Card Design Pages
+        </div>
+        <ImageUploader c={c} label="Photos of your card design"
+          hint="Upload each page / side of the card design. You can then tell us what goes on each one."
+          images={[]}
+          onAdd={addDesignPages}
+          onRemove={() => {}} />
+        {designPages.length > 0 && (
+          <div className="mt-5 space-y-4">
+            <div className="text-[11px] font-bold uppercase tracking-[0.2em]" style={{ color: c.subtext }}>Tell us what goes on each page</div>
+            {designPages.map((page, idx) => (
+              <div key={page.id} className="rounded-2xl border p-3 flex gap-3" style={{ borderColor: c.border, background: dark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.015)' }}>
+                <div className="relative shrink-0">
+                  <img src={page.image.dataUrl} alt={`Design page ${idx + 1}`} className="w-20 h-24 object-cover rounded-lg border" style={{ borderColor: c.border }} />
+                  <button type="button" onClick={() => removeDesignPage(page.id)} className="absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center text-white shadow-lg" style={{ background: c.accent }}>
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[11px] font-bold mb-1.5" style={{ color: c.gold }}>Page {idx + 1} — your command</div>
+                  <textarea value={page.command} onChange={e => setCommand(page.id, e.target.value)} rows={3}
+                    placeholder="e.g. Front page: Ganesh + couple names. Inside left: invitation text. Inside right: programmes (Haldi, Mehendi, Wedding)."
+                    className="w-full rounded-xl border px-3 py-2 text-[13px] font-medium outline-none resize-none" style={{ borderColor: c.border, background: dark ? 'rgba(255,255,255,0.04)' : '#fff', color: c.text }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* General notes */}
+      <div className="rounded-3xl border p-6 shadow-lg mb-5" style={{ borderColor: c.border, background: c.surface }}>
+        <label className="text-[11px] font-bold uppercase tracking-[0.25em] mb-3 block" style={{ color: c.gold }}>Any Other Instructions</label>
+        <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Fonts, colours, languages (Hindi / Marathi / Gujarati), anything else our designer should know…"
+          className="w-full rounded-xl border px-4 py-3 text-sm font-medium outline-none resize-none" style={{ borderColor: c.border, background: dark ? 'rgba(255,255,255,0.04)' : '#fff', color: c.text }} />
+      </div>
+
+      <button onClick={submit} disabled={!canSubmit}
+        className="w-full flex items-center justify-center gap-2.5 px-6 py-4 rounded-2xl text-white font-bold transition hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+        style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}>
+        <Send className="w-5 h-5" /> Submit Form & Design
+      </button>
+
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-2xl shadow-2xl text-sm font-bold text-white"
+          style={{ background: toast.type === 'error' ? c.accent : 'linear-gradient(135deg, #1DA851, #128C3E)' }}>
+          {toast.msg}
+        </div>
+      )}
     </div>
   );
 }
@@ -1560,12 +1876,15 @@ function AdminDashboard({ c, dark, orders, setOrders }: { c: Palette; dark: bool
                 style={{ borderColor: c.border, background: 'rgba(255,255,255,0.45)' }}>
                 <div className="flex items-center gap-4 min-w-0 flex-1">
                   <div className="w-12 h-12 rounded-full flex items-center justify-center shrink-0" style={{ background: `linear-gradient(135deg, ${c.primary}20, ${c.gold}28)` }}>
-                    <Heart className="w-5 h-5" style={{ color: c.gold }} />
+                    {o.mode === 'upload' ? <Camera className="w-5 h-5" style={{ color: c.gold }} /> : <Heart className="w-5 h-5" style={{ color: c.gold }} />}
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <div className="font-medium leading-none" style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '1.2rem', color: c.text }}>{o.couple}</div>
                       <div className="text-[10px] font-mono px-2 py-0.5 rounded-full" style={{ background: `${c.gold}15`, color: c.gold }}>{o.orderId}</div>
+                      <div className="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full flex items-center gap-1" style={{ background: o.mode === 'upload' ? `${c.accent}18` : `${c.primary}15`, color: o.mode === 'upload' ? c.accent : c.primary }}>
+                        {o.mode === 'upload' ? <><Camera className="w-2.5 h-2.5" /> Photos</> : <><Type className="w-2.5 h-2.5" /> Typed</>}
+                      </div>
                     </div>
                     <div className="text-xs mt-1 font-medium" style={{ color: c.subtext }}>{o.at}</div>
                   </div>
@@ -1606,12 +1925,33 @@ function StatusBadge({ s, c }: { s: string; c: Palette }) {
 }
 
 function OrderModal({ order, onClose, c, dark, cardSizeId, onStatusChange, onDelete }: { order: SubmittedOrder; onClose: () => void; c: Palette; dark: boolean; cardSizeId: string; onStatusChange: (s: SubmittedOrder['status']) => void; onDelete: () => void }) {
-  const corel = generateCorelText(order.form);
+  const isUpload = order.mode === 'upload';
+  const corel = order.form ? generateCorelText(order.form) : '';
   const [copied, setCopied] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [lightbox, setLightbox] = useState<string | null>(null);
   const copy = () => { navigator.clipboard?.writeText(corel); setCopied(true); setTimeout(() => setCopied(false), 1500); };
   const sizeConf = CARD_SIZES.find(s => s.id === cardSizeId);
   const shareWA = () => { const text = encodeURIComponent(`🌹 *Order ${order.orderId}*\n*Couple:* ${order.couple}\n*Status:* ${order.status}\n*Submitted:* ${order.at}\n\n_Wedding Matter Pro_`); window.open(`https://wa.me/?text=${text}`, '_blank'); };
+
+  const DeleteButtons = (
+    <div className="grid grid-cols-2 gap-2 mt-3">
+      <button onClick={shareWA} className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-white text-sm font-bold transition hover:opacity-90"
+        style={{ background: 'linear-gradient(135deg, #1DA851, #128C3E)' }}>
+        <MessageCircle className="w-4 h-4" /> WhatsApp
+      </button>
+      {confirmDelete ? (
+        <button onClick={onDelete} className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-white text-sm font-bold" style={{ background: '#dc2626' }}>
+          <Trash2 className="w-4 h-4" /> Confirm Delete
+        </button>
+      ) : (
+        <button onClick={() => setConfirmDelete(true)} className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-sm font-bold border"
+          style={{ borderColor: '#dc262640', color: '#dc2626', background: '#dc262610' }}>
+          <Trash2 className="w-4 h-4" /> Delete Order
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -1622,7 +1962,12 @@ function OrderModal({ order, onClose, c, dark, cardSizeId, onStatusChange, onDel
         <div className="sticky top-0 z-10 backdrop-blur-xl p-5 sm:p-6 border-b flex items-center justify-between gap-3"
           style={{ borderColor: c.border, background: dark ? 'rgba(13,4,7,0.90)' : 'rgba(251,245,230,0.90)' }}>
           <div className="min-w-0">
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] mb-1" style={{ color: c.gold }}>{order.orderId}</div>
+            <div className="flex items-center gap-2 mb-1">
+              <div className="text-[10px] font-bold uppercase tracking-[0.25em]" style={{ color: c.gold }}>{order.orderId}</div>
+              <div className="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full flex items-center gap-1" style={{ background: isUpload ? `${c.accent}18` : `${c.primary}15`, color: isUpload ? c.accent : c.primary }}>
+                {isUpload ? <><Camera className="w-2.5 h-2.5" /> Photos</> : <><Type className="w-2.5 h-2.5" /> Typed</>}
+              </div>
+            </div>
             <h2 className="font-medium truncate" style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '1.8rem' }}>{order.couple}</h2>
             <div className="text-xs mt-0.5 font-medium" style={{ color: c.subtext }}>{order.at}</div>
           </div>
@@ -1634,42 +1979,85 @@ function OrderModal({ order, onClose, c, dark, cardSizeId, onStatusChange, onDel
           </div>
         </div>
 
-        <div className="p-5 sm:p-6 grid lg:grid-cols-2 gap-6">
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <div className="text-[10px] font-bold uppercase tracking-[0.25em]" style={{ color: c.gold }}>Card Preview</div>
-              {sizeConf && <span className="text-[10px] px-2 py-0.5 rounded-full font-bold" style={{ background: `${c.gold}15`, color: c.gold }}>{sizeConf.label}</span>}
-            </div>
-            <CardPreview form={order.form} c={c} dark={dark} compact sizeId={cardSizeId} />
+        {isUpload && order.upload ? (
+          <div className="p-5 sm:p-6 space-y-6">
+            {(order.upload.contact || order.upload.notes) && (
+              <div className="rounded-2xl border p-5" style={{ borderColor: c.border, background: c.surface }}>
+                {order.upload.contact && (
+                  <div className="flex items-center gap-2 text-sm mb-2"><span className="font-bold" style={{ color: c.gold }}>Contact:</span> <span className="font-medium" style={{ color: c.text }}>{order.upload.contact}</span></div>
+                )}
+                {order.upload.notes && (
+                  <div><div className="text-[10px] font-bold uppercase tracking-[0.2em] mb-1" style={{ color: c.gold }}>Other Instructions</div><div className="text-sm font-medium whitespace-pre-line" style={{ color: c.text }}>{order.upload.notes}</div></div>
+                )}
+              </div>
+            )}
+
+            {order.upload.designPages.length > 0 && (
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-[0.25em] mb-3 flex items-center gap-2" style={{ color: c.gold }}><ImageIcon className="w-3.5 h-3.5" /> Design Pages & Commands</div>
+                <div className="space-y-3">
+                  {order.upload.designPages.map((page, idx) => (
+                    <div key={page.id} className="rounded-2xl border p-3 flex gap-4" style={{ borderColor: c.border, background: c.surface }}>
+                      <button onClick={() => setLightbox(page.image.dataUrl)} className="relative shrink-0 group">
+                        <img src={page.image.dataUrl} alt={`Design ${idx + 1}`} className="w-28 h-36 object-cover rounded-lg border" style={{ borderColor: c.border }} />
+                        <div className="absolute inset-0 rounded-lg flex items-center justify-center bg-black/0 group-hover:bg-black/30 transition"><ZoomIn className="w-6 h-6 text-white opacity-0 group-hover:opacity-100 transition" /></div>
+                      </button>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[11px] font-bold mb-1.5" style={{ color: c.gold }}>Page {idx + 1}</div>
+                        <div className="text-sm font-medium whitespace-pre-line" style={{ color: c.text }}>{page.command || <span className="italic opacity-50">No command provided</span>}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {order.upload.formPhotos.length > 0 && (
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-[0.25em] mb-3 flex items-center gap-2" style={{ color: c.gold }}><FileText className="w-3.5 h-3.5" /> Filled Form Photos</div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {order.upload.formPhotos.map(img => (
+                    <button key={img.id} onClick={() => setLightbox(img.dataUrl)} className="relative group rounded-xl overflow-hidden border" style={{ borderColor: c.border }}>
+                      <img src={img.dataUrl} alt={img.name} className="w-full h-40 object-cover" />
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/30 transition"><ZoomIn className="w-6 h-6 text-white opacity-0 group-hover:opacity-100 transition" /></div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {DeleteButtons}
           </div>
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <div className="text-[10px] font-bold uppercase tracking-[0.25em]" style={{ color: c.gold }}>CorelDRAW Export</div>
-              <button onClick={copy} className="flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-bold text-white" style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}>
-                {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied ? 'Copied' : 'Copy All'}
-              </button>
+        ) : (
+          <div className="p-5 sm:p-6 grid lg:grid-cols-2 gap-6">
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <div className="text-[10px] font-bold uppercase tracking-[0.25em]" style={{ color: c.gold }}>Card Preview</div>
+                {sizeConf && <span className="text-[10px] px-2 py-0.5 rounded-full font-bold" style={{ background: `${c.gold}15`, color: c.gold }}>{sizeConf.label}</span>}
+              </div>
+              {order.form && <CardPreview form={order.form} c={c} dark={dark} compact sizeId={cardSizeId} />}
             </div>
-            <pre className="text-[10px] whitespace-pre-wrap font-mono p-4 rounded-2xl border max-h-[360px] overflow-y-auto"
-              style={{ borderColor: c.border, background: dark ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.65)' }}>{corel}</pre>
-            <div className="grid grid-cols-2 gap-2 mt-3">
-              <button onClick={shareWA} className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-white text-sm font-bold transition hover:opacity-90"
-                style={{ background: 'linear-gradient(135deg, #1DA851, #128C3E)' }}>
-                <MessageCircle className="w-4 h-4" /> WhatsApp
-              </button>
-              {confirmDelete ? (
-                <button onClick={onDelete} className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-white text-sm font-bold" style={{ background: '#dc2626' }}>
-                  <Trash2 className="w-4 h-4" /> Confirm Delete
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-[10px] font-bold uppercase tracking-[0.25em]" style={{ color: c.gold }}>CorelDRAW Export</div>
+                <button onClick={copy} className="flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-bold text-white" style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}>
+                  {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied ? 'Copied' : 'Copy All'}
                 </button>
-              ) : (
-                <button onClick={() => setConfirmDelete(true)} className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-sm font-bold border"
-                  style={{ borderColor: '#dc262640', color: '#dc2626', background: '#dc262610' }}>
-                  <Trash2 className="w-4 h-4" /> Delete Order
-                </button>
-              )}
+              </div>
+              <pre className="text-[10px] whitespace-pre-wrap font-mono p-4 rounded-2xl border max-h-[360px] overflow-y-auto"
+                style={{ borderColor: c.border, background: dark ? 'rgba(0,0,0,0.3)' : 'rgba(255,255,255,0.65)' }}>{corel}</pre>
+              {DeleteButtons}
             </div>
           </div>
-        </div>
+        )}
       </motion.div>
+
+      {lightbox && (
+        <div className="fixed inset-0 z-[60] bg-black/90 flex items-center justify-center p-6" onClick={e => { e.stopPropagation(); setLightbox(null); }}>
+          <img src={lightbox} alt="Full size" className="max-w-full max-h-full object-contain rounded-lg" />
+          <button onClick={e => { e.stopPropagation(); setLightbox(null); }} className="absolute top-5 right-5 w-10 h-10 rounded-full bg-white/15 text-white flex items-center justify-center hover:bg-white/25 transition"><X className="w-5 h-5" /></button>
+        </div>
+      )}
     </motion.div>
   );
 }

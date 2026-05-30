@@ -30,10 +30,12 @@ Premium wedding invitation card studio — customers fill an 8-step wizard to se
 
 ## Product
 
-- **Customer flow**: 8-step wizard collecting bride/groom details, deity selection, invitation template, programmes, extras, typography design choices
-- **Live card preview**: rendered preview updates in real time, expandable to full-screen
-- **CorelDRAW export**: structured plain-text block generated on submission, copyable by designer
-- **Admin dashboard**: order listing with status badges, per-order modal with card preview + export text
+- **Two input modes**: customers first choose how to give their matter —
+  - **Type mode**: the 8-step wizard (bride/groom details, deity, template, programmes, extras, typography) with a live card preview + CorelDRAW export
+  - **Upload mode**: customers who filled a physical form upload photos of it plus each card design page, with a per-page "command" note saying which matter goes where
+- **Live card preview**: white background with black text for legibility (gold kept only for decorative borders/dividers); updates in real time, expandable to full-screen
+- **CorelDRAW export**: structured plain-text block generated on submission for typed orders, copyable by designer
+- **Admin dashboard**: order listing with mode badges (Typed / Photos) + status badges; per-order modal shows either the card preview + export (typed) or photo galleries with placement commands and a lightbox (upload)
 - **22 invitation templates** across 8 categories (Classic, Romantic, Daughter, Modern, Reception, etc.)
 - **12 deities** with glyphs and mantras
 - **20+ Google Fonts** supporting English, Hindi, Marathi, Gujarati scripts

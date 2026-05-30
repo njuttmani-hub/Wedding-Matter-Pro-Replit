@@ -73,10 +73,33 @@ export interface FormState {
   meta: { accepted: boolean };
 }
 
+export interface UploadedImage {
+  id: string;
+  dataUrl: string;
+  name: string;
+}
+
+export interface DesignPage {
+  id: string;
+  image: UploadedImage;
+  command: string;   // what matter goes on this page / where
+}
+
+export interface UploadOrderData {
+  brideName: string;
+  groomName: string;
+  contact: string;
+  formPhotos: UploadedImage[];
+  designPages: DesignPage[];
+  notes: string;
+}
+
 export interface SubmittedOrder {
   orderId: string;
   at: string;
   couple: string;
-  form: FormState;
+  mode: 'type' | 'upload';
+  form?: FormState;          // present when mode === 'type'
+  upload?: UploadOrderData;  // present when mode === 'upload'
   status: 'New' | 'In Progress' | 'Completed';
 }
