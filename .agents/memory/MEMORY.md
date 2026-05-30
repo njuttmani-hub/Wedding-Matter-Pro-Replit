@@ -1,1 +1,2 @@
 - [Wedding Matter Pro storage](wedding-matter-pro-storage.md) — frontend-only app; all orders+photos live in localStorage (~5MB), so order saves must surface quota failures, never swallow them.
+- [Lazy third-party clients](lazy-third-party-clients.md) — api-server libs must build SDK clients (OpenAI etc.) lazily & tolerate a missing key, or a bad secret crashes the whole API at boot.
