@@ -7,9 +7,35 @@
     padding: 0;
   }
 
+  html {
+    font-size: 18px;
+  }
+
   body {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-weight: 700;
+  }
+
+  button, label, input, select, textarea, p, span, div, a {
+    font-weight: inherit;
+  }
+
+  .font-bold {
+    font-weight: 800 !important;
+  }
+
+  .font-semibold {
+    font-weight: 700 !important;
+  }
+
+  .font-medium {
+    font-weight: 600 !important;
   }
 
   input[type="range"]::-webkit-slider-thumb {
