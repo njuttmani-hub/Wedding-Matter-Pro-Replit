@@ -5,12 +5,10 @@ import {
   Heart, Calendar, FileText, Type, Eye, Send, Copy, Search,
   Sun, Moon, LayoutDashboard, Clock, CheckCircle2, Edit3, X,
   Smartphone, Monitor, Printer, ArrowUp, ArrowDown, User, Package,
-  Bell, Palette as PaletteIcon, Crown, Flame, Gem, Star, BookOpen,
-  MessageCircle, Zap, Info, ArrowLeftRight, CloudOff, Save, Maximize2,
-  Upload, Camera, Image as ImageIcon, ZoomIn
+  Bell, Palette as PaletteIcon, Star, BookOpen,
+  MessageCircle, Zap, Info, ArrowLeftRight, CloudOff, Save, Maximize2
 } from 'lucide-react';
-import type { Palette, FormState, PersonInfo, Programme, SubmittedOrder, UploadedImage, DesignPage, UploadOrderData } from './types';
-import { useExtractMatter, type ExtractedMatter } from '@workspace/api-client-react';
+import type { Palette, FormState, PersonInfo, Programme, SubmittedOrder } from './types';
 import {
   INVITATION_TEMPLATES, DEITIES, RELATION_WORDS, CLOSING_TAGS, KIDS_LINES,
   PROGRAMME_PRESETS, FONTS, CARD_SIZES, SALUTATIONS
@@ -43,11 +41,6 @@ const palette: { light: Palette; dark: Palette } = {
 };
 
 /* ─── UI Constants ───────────────────────────────────────────────────────── */
-const LAYOUTS = [
-  { id: 'royal',       name: 'Royal',       desc: 'Ornate borders, grand fonts',   icon: Crown },
-  { id: 'traditional', name: 'Traditional', desc: 'Classic Indian aesthetic',      icon: Flame },
-  { id: 'modern',      name: 'Modern',      desc: 'Clean, editorial spacing',      icon: Gem },
-];
 
 const STEPS = [
   { id: 0, label: 'Family',          short: 'Family', icon: User,         tip: 'Enter names exactly as they should appear. Add a prefix (Shri, Smt., etc.) for parents and grandparents.' },
@@ -139,102 +132,6 @@ const sampleForm: FormState = {
   withCompliments: 'Sharma & Mehta Families',
 };
 
-/* ─── AI matter → FormState mapper ───────────────────────────────────────── */
-function matchDeities(names: string[]): string[] {
-  const ids = new Set<string>();
-  for (const raw of names) {
-    const q = raw.toLowerCase();
-    const hit = DEITIES.find(d =>
-      q.includes(d.id) || d.name.toLowerCase().split(/\s+/).some(w => w.length > 2 && q.includes(w))
-    );
-    if (hit) ids.add(hit.id);
-  }
-  return ids.size ? [...ids] : ['ganesh'];
-}
-
-function matchLanguage(lang: string): string {
-  const q = (lang || '').toLowerCase();
-  if (q.includes('hindi')) return 'Hindi';
-  if (q.includes('marathi')) return 'Marathi';
-  if (q.includes('gujarati')) return 'Gujarati';
-  return 'English';
-}
-
-function matchRelationWord(word: string): string {
-  const q = (word || '').toLowerCase().trim();
-  const hit = RELATION_WORDS.find(r => r.id === q || r.label.toLowerCase() === q);
-  return hit ? hit.id : initialForm.relationWord;
-}
-
-function parseTime(time: string): { hour: string; minute: string; ampm: 'AM' | 'PM' } {
-  const m = (time || '').match(/(\d{1,2})[:.]?(\d{2})?\s*(am|pm)?/i);
-  if (!m) return { hour: '07', minute: '00', ampm: 'PM' };
-  let h = parseInt(m[1], 10);
-  const min = m[2] ?? '00';
-  let ap = (m[3] || '').toUpperCase();
-  if (!ap) { ap = h >= 12 ? 'PM' : 'AM'; }
-  if (h > 12) h -= 12;
-  if (h === 0) h = 12;
-  return { hour: String(h).padStart(2, '0'), minute: min.padStart(2, '0'), ampm: ap === 'AM' ? 'AM' : 'PM' };
-}
-
-function parseDate(date: string): string {
-  if (!date) return '';
-  const d = new Date(date);
-  if (isNaN(d.getTime())) return '';
-  // Use local date parts (not toISOString) to avoid a timezone off-by-one shift.
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function matchPreset(name: string): string {
-  const q = (name || '').toLowerCase();
-  const hit = PROGRAMME_PRESETS.find(p => q.includes(p.id) || p.name.toLowerCase().split(/\s+/).some(w => w.length > 3 && q.includes(w)));
-  return hit ? hit.id : 'custom';
-}
-
-function mapExtractedToForm(ext: ExtractedMatter): FormState {
-  const person = (p: ExtractedMatter['bride'], fallbackName: string): PersonInfo => ({
-    ...emptyPerson(),
-    name: (p?.name || fallbackName || '').trim(),
-    fatherName: (p?.fatherName || '').trim(),
-    motherName: (p?.motherName || '').trim(),
-    grandfatherName: (p?.grandfatherName || '').trim(),
-    grandmotherName: (p?.grandmotherName || '').trim(),
-  });
-
-  const programmes: Programme[] = (ext.programmes || []).map((pr, i) => {
-    const t = parseTime(pr.time);
-    return {
-      id: Date.now() + i,
-      preset: matchPreset(pr.name),
-      name: (pr.name || 'Our Function').trim(),
-      date: parseDate(pr.date),
-      hour: t.hour, minute: t.minute, ampm: t.ampm,
-      venue: (pr.venue || '').trim(),
-      address: (pr.address || '').trim(),
-    };
-  });
-
-  return {
-    ...initialForm,
-    bride: person(ext.bride, ext.brideName),
-    groom: person(ext.groom, ext.groomName),
-    family: {
-      title: (ext.familyTitle || '').trim(),
-      nativePlace: (ext.nativePlace || '').trim(),
-      residenceAddress: (ext.residenceAddress || '').trim(),
-    },
-    deities: matchDeities(ext.deities || []),
-    relationWord: matchRelationWord(ext.relationWord),
-    programmes: programmes.length ? programmes : [emptyProgramme('wedding')],
-    withCompliments: (ext.familyTitle || '').trim(),
-    design: { ...initialForm.design, language: matchLanguage(ext.language) },
-  };
-}
-
 /* ─── Helpers ────────────────────────────────────────────────────────────── */
 function pn(prefix: string, name: string) {
   const p = prefix.trim(); const n = name.trim();
@@ -248,13 +145,7 @@ function fmtTime(h: string, m: string, ap: string) {
 }
 
 function fillTemplate(text: string, form: FormState): string {
-  const relation = RELATION_WORDS.find(r => r.id === form.relationWord);
-  const above = form.aboveWeds === 'bride' ? form.bride : form.groom;
-  const below = form.aboveWeds === 'bride' ? form.groom : form.bride;
-  const childName = `${above.name || '___'} ${relation ? relation.label : 'Weds'} ${below.name || '___'}`;
-  return text.replace(/\{child\}/g, childName)
-    .replace(/\{bride\}/g, form.bride.name || '___')
-    .replace(/\{groom\}/g, form.groom.name || '___');
+  return text.replace(/\{bride\}/g, form.bride.name || '').replace(/\{groom\}/g, form.groom.name || '');
 }
 
 function generateCorelText(form: FormState): string {
@@ -341,7 +232,6 @@ function saveOrders(orders: SubmittedOrder[]): boolean {
 /* ─── Root App ───────────────────────────────────────────────────────────── */
 export default function WeddingApp() {
   const [mode, setMode] = useState<'customer' | 'admin'>('customer');
-  const [inputMode, setInputMode] = useState<'choose' | 'type' | 'upload'>('choose');
   const [dark, setDark] = useState(false);
   const [orders, setOrders] = useState<SubmittedOrder[]>(() => loadOrders());
   const c = dark ? palette.dark : palette.light;
@@ -372,19 +262,9 @@ export default function WeddingApp() {
       <main className="relative z-10 max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 pb-32 pt-6">
         <AnimatePresence mode="wait">
           {mode === 'customer' ? (
-            inputMode === 'choose' ? (
-              <motion.div key="choose" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35 }}>
-                <ModeChooser c={c} onPick={setInputMode} />
-              </motion.div>
-            ) : inputMode === 'type' ? (
-              <motion.div key="c" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35 }}>
-                <CustomerFlow c={c} dark={dark} addOrder={addOrder} onBack={() => setInputMode('choose')} />
-              </motion.div>
-            ) : (
-              <motion.div key="u" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35 }}>
-                <UploadFlow c={c} dark={dark} addOrder={addOrder} onBack={() => setInputMode('choose')} />
-              </motion.div>
-            )
+            <motion.div key="c" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35 }}>
+              <CustomerFlow c={c} dark={dark} addOrder={addOrder} />
+            </motion.div>
           ) : (
             <motion.div key="a" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35 }}>
               <AdminDashboard c={c} dark={dark} orders={orders} setOrders={o => { setOrders(o); saveOrders(o); }} />
@@ -919,7 +799,7 @@ function PersonCard({ side, person, update, prefix, c }: { side: string; person:
       </div>
       <div className="space-y-3">
         {/* Name — no salutation for bride/groom themselves */}
-        <Field label={`${side}'s Full Name`} required c={c}>
+        <Field label={`${side}'s Name`} required c={c}>
           <Input c={c} value={person.name} onChange={e => update(`${prefix}.name`, e.target.value)} placeholder={isBride ? 'Aditi Sharma' : 'Rohan Mehta'} />
         </Field>
         {/* Father */}
@@ -1175,83 +1055,48 @@ function StepDesign({ form, update, c, dark }: { form: FormState; update: (path:
   const [cat, setCat] = useState('All');
   const [target, setTarget] = useState('heading');
   const cats = ['All', ...Array.from(new Set(FONTS.map(f => f.cat)))];
-  const filtered = FONTS.filter(f => (cat === 'All' || f.cat === cat) && (form.design.language === 'English' ? f.langs.includes('English') : f.langs.includes(form.design.language) || f.langs.includes('English')) && f.name.toLowerCase().includes(search.toLowerCase()));
-  const previewText = form.design.language === 'Hindi' ? 'विवाह आमंत्रण' : form.design.language === 'Marathi' ? 'विवाह सोहळा' : form.design.language === 'Gujarati' ? 'લગ્ન આમંત્રણ' : 'Wedding Invitation';
+  const filtered = FONTS.filter(f => (cat === 'All' || f.cat === cat) && f.langs.includes('English') && f.name.toLowerCase().includes(search.toLowerCase()));
+  const previewText = 'Wedding Invitation';
 
   return (
-    <>
-      <Section title="Layout & Language" eyebrow="Step 6A of 8" subtitle="Choose language and card layout." c={c} icon={PaletteIcon}>
-        <Field label="Card Language" c={c}>
-          <div className="grid grid-cols-4 gap-2 mt-1">
-            {['English', 'Hindi', 'Marathi', 'Gujarati'].map(l => (
-              <button key={l} onClick={() => update('design.language', l)}
-                className="py-3 rounded-2xl border-2 text-sm font-bold transition-all"
-                style={{ borderColor: form.design.language === l ? c.gold : c.border, background: form.design.language === l ? `${c.gold}15` : 'rgba(255,255,255,0.4)', color: form.design.language === l ? c.gold : c.text }}>
-                {l}
-              </button>
-            ))}
-          </div>
-        </Field>
-        <div className="mt-5">
-          <Field label="Card Layout Style" c={c}>
-            <div className="grid sm:grid-cols-3 gap-3 mt-1">
-              {LAYOUTS.map(l => {
-                const Icon = l.icon; const active = form.design.layout === l.id;
-                return (
-                  <motion.button key={l.id} whileHover={{ y: -3 }} whileTap={{ scale: 0.97 }} onClick={() => update('design.layout', l.id)}
-                    className="p-4 rounded-2xl border-2 text-left transition-all"
-                    style={{ borderColor: active ? c.gold : c.border, background: active ? `linear-gradient(135deg, ${c.gold}12, ${c.primary}08)` : 'rgba(255,255,255,0.4)', boxShadow: active ? `0 10px 30px -10px ${c.gold}50` : 'none' }}>
-                    <Icon className="w-5 h-5 mb-2" style={{ color: active ? c.gold : c.subtext }} />
-                    <div className="font-bold text-sm" style={{ color: c.text }}>{l.name}</div>
-                    <div className="text-xs mt-0.5 font-medium" style={{ color: c.subtext }}>{l.desc}</div>
-                  </motion.button>
-                );
-              })}
-            </div>
-          </Field>
-        </div>
-      </Section>
-      <div className="mt-5">
-        <Section title="Typography" eyebrow="Step 6B · Optional" subtitle="Fine-tune fonts and sizes." c={c} icon={Type}>
-          <div className="grid sm:grid-cols-3 gap-4 mb-6">
-            <SliderField label="Font Size" value={form.design.fontSize} min={12} max={22} step={1} unit="px" onChange={v => update('design.fontSize', v)} c={c} />
-            <SliderField label="Letter Spacing" value={form.design.letterSpacing} min={0} max={4} step={0.1} unit="px" onChange={v => update('design.letterSpacing', v)} c={c} />
-            <SliderField label="Line Height" value={form.design.lineHeight} min={1.2} max={2.2} step={0.05} unit="×" onChange={v => update('design.lineHeight', v)} c={c} />
-          </div>
-          <div className="rounded-2xl border overflow-hidden" style={{ borderColor: c.border }}>
-            <div className="flex gap-1 p-2 m-2 rounded-xl" style={{ background: dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' }}>
-              {[{ k: 'heading', l: 'Heading' }, { k: 'body', l: 'Body' }, { k: 'script', l: 'Script' }].map(t => (
-                <button key={t.k} onClick={() => setTarget(t.k)} className="flex-1 py-2 rounded-lg text-xs font-bold transition-all"
-                  style={{ background: target === t.k ? `linear-gradient(135deg, ${c.primary}, ${c.gold})` : 'transparent', color: target === t.k ? 'white' : c.subtext }}>{t.l}</button>
-              ))}
-            </div>
-            <div className="flex flex-col sm:flex-row gap-2 px-3 pb-2">
-              <div className="relative flex-1"><Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 opacity-40" /><Input c={c} className="pl-10" placeholder="Search fonts…" value={search} onChange={e => setSearch(e.target.value)} /></div>
-              <Select c={c} className="sm:w-40" value={cat} onChange={e => setCat(e.target.value)}>{cats.map(ct => <option key={ct}>{ct}</option>)}</Select>
-            </div>
-            <div className="grid sm:grid-cols-2 gap-2 max-h-80 overflow-y-auto p-3 pt-0">
-              {filtered.map(f => {
-                const targetKey = target === 'heading' ? 'headingFont' : target === 'body' ? 'bodyFont' : 'scriptFont';
-                const active = form.design[targetKey as keyof typeof form.design] === f.family;
-                return (
-                  <motion.button key={f.name} whileHover={{ y: -2 }} onClick={() => update(`design.${targetKey}`, f.family)}
-                    className="flex items-center justify-between p-3 rounded-xl border-2 text-left transition-all"
-                    style={{ borderColor: active ? c.gold : c.border, background: active ? `${c.gold}12` : 'rgba(255,255,255,0.55)' }}>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate" style={{ fontFamily: f.family, fontSize: '1.35em', color: c.text, lineHeight: 1.1 }}>{previewText}</div>
-                      <div className="text-[10px] mt-1 flex items-center gap-2" style={{ color: c.subtext }}>
-                        <span className="font-bold">{f.name}</span><span className="opacity-50">·</span><span>{f.cat}</span>
-                      </div>
-                    </div>
-                    {active && <Check className="w-4 h-4 shrink-0 ml-2" style={{ color: c.gold }} strokeWidth={3} />}
-                  </motion.button>
-                );
-              })}
-            </div>
-          </div>
-        </Section>
+    <Section title="Typography" eyebrow="Step 6 of 8" subtitle="Fine-tune fonts and sizes." c={c} icon={Type}>
+      <div className="grid sm:grid-cols-3 gap-4 mb-6">
+        <SliderField label="Font Size" value={form.design.fontSize} min={12} max={22} step={1} unit="px" onChange={v => update('design.fontSize', v)} c={c} />
+        <SliderField label="Letter Spacing" value={form.design.letterSpacing} min={0} max={4} step={0.1} unit="px" onChange={v => update('design.letterSpacing', v)} c={c} />
+        <SliderField label="Line Height" value={form.design.lineHeight} min={1.2} max={2.2} step={0.05} unit="×" onChange={v => update('design.lineHeight', v)} c={c} />
       </div>
-    </>
+      <div className="rounded-2xl border overflow-hidden" style={{ borderColor: c.border }}>
+        <div className="flex gap-1 p-2 m-2 rounded-xl" style={{ background: dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' }}>
+          {[{ k: 'heading', l: 'Heading' }, { k: 'body', l: 'Body' }, { k: 'script', l: 'Script' }].map(t => (
+            <button key={t.k} onClick={() => setTarget(t.k)} className="flex-1 py-2 rounded-lg text-xs font-bold transition-all"
+              style={{ background: target === t.k ? `linear-gradient(135deg, ${c.primary}, ${c.gold})` : 'transparent', color: target === t.k ? 'white' : c.subtext }}>{t.l}</button>
+          ))}
+        </div>
+        <div className="flex flex-col sm:flex-row gap-2 px-3 pb-2">
+          <div className="relative flex-1"><Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 opacity-40" /><Input c={c} className="pl-10" placeholder="Search fonts…" value={search} onChange={e => setSearch(e.target.value)} /></div>
+          <Select c={c} className="sm:w-40" value={cat} onChange={e => setCat(e.target.value)}>{cats.map(ct => <option key={ct}>{ct}</option>)}</Select>
+        </div>
+        <div className="grid sm:grid-cols-2 gap-2 max-h-80 overflow-y-auto p-3 pt-0">
+          {filtered.map(f => {
+            const targetKey = target === 'heading' ? 'headingFont' : target === 'body' ? 'bodyFont' : 'scriptFont';
+            const active = form.design[targetKey as keyof typeof form.design] === f.family;
+            return (
+              <motion.button key={f.name} whileHover={{ y: -2 }} onClick={() => update(`design.${targetKey}`, f.family)}
+                className="flex items-center justify-between p-3 rounded-xl border-2 text-left transition-all"
+                style={{ borderColor: active ? c.gold : c.border, background: active ? `${c.gold}12` : 'rgba(255,255,255,0.55)' }}>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate" style={{ fontFamily: f.family, fontSize: '1.35em', color: c.text, lineHeight: 1.1 }}>{previewText}</div>
+                  <div className="text-[10px] mt-1 flex items-center gap-2" style={{ color: c.subtext }}>
+                    <span className="font-bold">{f.name}</span><span className="opacity-50">·</span><span>{f.cat}</span>
+                  </div>
+                </div>
+                {active && <Check className="w-4 h-4 shrink-0 ml-2" style={{ color: c.gold }} strokeWidth={3} />}
+              </motion.button>
+            );
+          })}
+        </div>
+      </div>
+    </Section>
   );
 }
 
@@ -1401,8 +1246,6 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
             {DEITIES.find(d => d.id === form.deities[0])?.mantra}
           </div>
         )}
-
-        <DecorativeDivider compact={compact} />
 
         {/* Host parents line — show exactly as typed */}
         {form.hostType === 'parents' && (above.fatherName || above.motherName || below.fatherName || below.motherName) && (

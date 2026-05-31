@@ -38,6 +38,7 @@ export interface Programme {
   ampm: 'AM' | 'PM';
   venue: string;
   address: string;
+  mealType?: 'none' | 'dinner' | 'lunch';
 }
 
 export interface FormState {
