@@ -1,22 +1,25 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import type { Session } from '@supabase/supabase-js';
 import {
   Sparkles, ChevronRight, ChevronLeft, Check, Plus, Trash2,
   Heart, Calendar, FileText, Type, Eye, Send, Copy, Search,
   Sun, Moon, LayoutDashboard, Clock, CheckCircle2, Edit3, X,
   Smartphone, Monitor, Printer, ArrowUp, ArrowDown, User, Package,
   Bell, Palette as PaletteIcon, Star, BookOpen,
-  MessageCircle, Zap, Info, ArrowLeftRight, CloudOff, Save, Maximize2
+  MessageCircle, Zap, Info, ArrowLeftRight, CloudOff, Save, Maximize2,
+  LogOut, Lock, Loader2
 } from 'lucide-react';
 import type { Palette, FormState, PersonInfo, Programme, SubmittedOrder } from './types';
 import {
   INVITATION_TEMPLATES, DEITIES, RELATION_WORDS, CLOSING_TAGS, KIDS_LINES,
   PROGRAMME_PRESETS, FONTS, CARD_SIZES, SALUTATIONS
 } from './data/constants';
+import { fetchOrders, insertOrder, updateOrderStatus, deleteOrder as deleteOrderRow, subscribeToOrders } from './lib/orders';
+import { getSession, onAuthChange, signIn, signOut } from './lib/auth';
 
 /* ─── Storage keys ───────────────────────────────────────────────────────── */
 const DRAFT_KEY = 'wmp_draft_v3';
-const ORDERS_KEY = 'wmp_orders_v2';
 
 /* ─── Colour palette ─────────────────────────────────────────────────────── */
 const palette: { light: Palette; dark: Palette } = {
@@ -207,43 +210,50 @@ function loadDraft(): FormState {
   return initialForm;
 }
 
-function loadOrders(): SubmittedOrder[] {
-  try {
-    const raw = localStorage.getItem(ORDERS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as SubmittedOrder[];
-      return parsed;
-    }
-  } catch { /* ignore */ }
-  return [];
-}
-
-// Returns true on success, false if persistence failed (e.g. localStorage quota exceeded)
-function saveOrders(orders: SubmittedOrder[]): boolean {
-  try {
-    localStorage.setItem(ORDERS_KEY, JSON.stringify(orders));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /* ─── Root App ───────────────────────────────────────────────────────────── */
 export default function WeddingApp() {
   const [mode, setMode] = useState<'customer' | 'admin'>('customer');
   const [dark, setDark] = useState(false);
-  const [orders, setOrders] = useState<SubmittedOrder[]>(() => loadOrders());
+  const [orders, setOrders] = useState<SubmittedOrder[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(true);
+  const [session, setSession] = useState<Session | null>(null);
+  const [sessionLoading, setSessionLoading] = useState(true);
   const c = dark ? palette.dark : palette.light;
 
-  const ordersRef = React.useRef(orders);
-  useEffect(() => { ordersRef.current = orders; }, [orders]);
-
-  const addOrder = useCallback((order: SubmittedOrder): boolean => {
-    const next = [order, ...ordersRef.current];
-    if (!saveOrders(next)) return false;   // persistence failed — don't update UI
-    setOrders(next);
-    return true;
+  const refreshOrders = useCallback(async () => {
+    setOrders(await fetchOrders());
   }, []);
+
+  useEffect(() => {
+    refreshOrders().finally(() => setOrdersLoading(false));
+    return subscribeToOrders(refreshOrders);
+  }, [refreshOrders]);
+
+  useEffect(() => {
+    // Refetch on every auth change too — the orders RLS policy only allows
+    // `select` for a signed-in admin, so a fresh sign-in needs a refetch to
+    // actually see any rows (an anonymous fetch just returns an empty list).
+    getSession().then(s => { setSession(s); setSessionLoading(false); if (s) refreshOrders(); });
+    return onAuthChange(s => { setSession(s); refreshOrders(); });
+  }, [refreshOrders]);
+
+  const addOrder = useCallback(async (couple: string, form: FormState): Promise<SubmittedOrder | null> => {
+    const order = await insertOrder(couple, form);
+    if (order) setOrders(prev => [order, ...prev]);
+    return order;
+  }, []);
+
+  // Optimistic update, then reconcile with the server on failure — realtime
+  // keeps every other open tab/device in sync automatically on success.
+  const changeOrderStatus = useCallback(async (orderId: string, status: SubmittedOrder['status']) => {
+    setOrders(prev => prev.map(o => o.orderId === orderId ? { ...o, status } : o));
+    if (!(await updateOrderStatus(orderId, status))) refreshOrders();
+  }, [refreshOrders]);
+
+  const removeOrder = useCallback(async (orderId: string) => {
+    setOrders(prev => prev.filter(o => o.orderId !== orderId));
+    if (!(await deleteOrderRow(orderId))) refreshOrders();
+  }, [refreshOrders]);
 
   useEffect(() => {
     const id = 'wmp-fonts-v3';
@@ -257,16 +267,24 @@ export default function WeddingApp() {
   return (
     <div className="min-h-screen relative transition-colors duration-700" style={{ background: c.bg1, color: c.text, fontFamily: "'EB Garamond', serif" }}>
       <Atmosphere c={c} />
-      <Nav mode={mode} setMode={setMode} dark={dark} setDark={setDark} c={c} orderCount={orders.filter(o => o.status === 'New').length} />
+      <Nav mode={mode} setMode={setMode} dark={dark} setDark={setDark} c={c} orderCount={orders.filter(o => o.status === 'New').length} session={session} onSignOut={signOut} />
       <main className="relative z-10 max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 pb-32 pt-6">
         <AnimatePresence mode="wait">
           {mode === 'customer' ? (
             <motion.div key="c" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35 }}>
               <CustomerFlow c={c} dark={dark} addOrder={addOrder} />
             </motion.div>
-          ) : (
+          ) : sessionLoading ? (
+            <motion.div key="a-loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-center py-24">
+              <Loader2 className="w-6 h-6 animate-spin" style={{ color: c.gold }} />
+            </motion.div>
+          ) : session ? (
             <motion.div key="a" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35 }}>
-              <AdminDashboard c={c} dark={dark} orders={orders} setOrders={o => { setOrders(o); saveOrders(o); }} />
+              <AdminDashboard c={c} dark={dark} orders={orders} ordersLoading={ordersLoading} onStatusChange={changeOrderStatus} onDelete={removeOrder} />
+            </motion.div>
+          ) : (
+            <motion.div key="a-login" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35 }}>
+              <AdminLogin c={c} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -291,7 +309,7 @@ function Atmosphere({ c }: { c: Palette }) {
 }
 
 /* ─── Navigation ─────────────────────────────────────────────────────────── */
-function Nav({ mode, setMode, dark, setDark, c, orderCount }: { mode: string; setMode: (m: 'customer' | 'admin') => void; dark: boolean; setDark: (d: boolean) => void; c: Palette; orderCount: number }) {
+function Nav({ mode, setMode, dark, setDark, c, orderCount, session, onSignOut }: { mode: string; setMode: (m: 'customer' | 'admin') => void; dark: boolean; setDark: (d: boolean) => void; c: Palette; orderCount: number; session: Session | null; onSignOut: () => void }) {
   return (
     <nav className="relative z-20 border-b" style={{ borderColor: c.border, background: c.surface, backdropFilter: 'blur(24px)' }}>
       <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -318,6 +336,11 @@ function Nav({ mode, setMode, dark, setDark, c, orderCount }: { mode: string; se
               )}
             </button>
           </div>
+          {mode === 'admin' && session && (
+            <button onClick={onSignOut} title="Sign out" className="w-9 h-9 rounded-full flex items-center justify-center border transition-all hover:scale-110" style={{ borderColor: c.border, background: c.surface }}>
+              <LogOut className="w-4 h-4" style={{ color: c.subtext }} />
+            </button>
+          )}
           <button onClick={() => setDark(!dark)} className="w-9 h-9 rounded-full flex items-center justify-center border transition-all hover:scale-110" style={{ borderColor: c.border, background: c.surface }}>
             {dark ? <Sun className="w-4 h-4" style={{ color: c.gold }} /> : <Moon className="w-4 h-4" style={{ color: c.primary }} />}
           </button>
@@ -327,13 +350,66 @@ function Nav({ mode, setMode, dark, setDark, c, orderCount }: { mode: string; se
   );
 }
 
+/* ─── Admin Login ────────────────────────────────────────────────────────── */
+function AdminLogin({ c }: { c: Palette }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    const err = await signIn(email, password);
+    setLoading(false);
+    if (err) setError(err);
+    // On success, onAuthChange (wired in the root component) flips the
+    // screen to the dashboard automatically — nothing else to do here.
+  };
+
+  return (
+    <div className="max-w-sm mx-auto mt-16">
+      <div className="rounded-3xl border shadow-xl p-8" style={{ borderColor: c.border, background: c.surface, backdropFilter: 'blur(20px)' }}>
+        <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-5 mx-auto" style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}>
+          <Lock className="w-5 h-5 text-white" />
+        </div>
+        <div className="text-center mb-6">
+          <div className="font-medium" style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '1.6rem', color: c.text }}>Designer Sign In</div>
+          <div className="text-xs mt-1 font-medium" style={{ color: c.subtext }}>Only staff with an account can view orders.</div>
+        </div>
+        <form onSubmit={submit} className="space-y-3">
+          <Field label="Email" c={c}>
+            <Input c={c} type="email" required autoComplete="username" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@yourstudio.com" />
+          </Field>
+          <Field label="Password" c={c}>
+            <Input c={c} type="password" required autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
+          </Field>
+          {error && (
+            <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl text-xs font-semibold leading-snug" style={{ background: `${c.primary}12`, border: `1px solid ${c.primary}30`, color: c.primary }}>
+              <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {error}
+            </div>
+          )}
+          <button type="submit" disabled={loading}
+            className="w-full flex items-center justify-center gap-2 py-3 rounded-full text-sm font-bold text-white shadow-xl tracking-wide transition disabled:opacity-60"
+            style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}>
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+            {loading ? 'Signing in…' : 'Sign In'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 /* ─── Customer Flow ──────────────────────────────────────────────────────── */
-function CustomerFlow({ c, dark, addOrder, onBack }: { c: Palette; dark: boolean; addOrder: (o: SubmittedOrder) => boolean; onBack?: () => void }) {
+function CustomerFlow({ c, dark, addOrder, onBack }: { c: Palette; dark: boolean; addOrder: (couple: string, form: FormState) => Promise<SubmittedOrder | null>; onBack?: () => void }) {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<FormState>(() => loadDraft());
   const [submitted, setSubmitted] = useState<SubmittedOrder | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [previewExpanded, setPreviewExpanded] = useState(false);
   const [offline, setOffline] = useState(!navigator.onLine);
 
@@ -379,16 +455,14 @@ function CustomerFlow({ c, dark, addOrder, onBack }: { c: Palette; dark: boolean
   const next = () => { if (!canNext) { showToast(VALIDATION_HINTS[step] || 'Please complete this step.', 'error'); return; } setStep(s => Math.min(STEPS.length - 1, s + 1)); window.scrollTo({ top: 0, behavior: 'smooth' }); };
   const prev = () => { setStep(s => Math.max(0, s - 1)); window.scrollTo({ top: 0, behavior: 'smooth' }); };
 
-  const submit = () => {
+  const submit = async () => {
     if (!form.meta.accepted) { showToast('Please tick the confirmation checkbox.', 'error'); return; }
-    const order: SubmittedOrder = {
-      orderId: `WMP-${Math.floor(2400 + Math.random() * 800)}`,
-      at: new Date().toLocaleString(),
-      couple: `${form.bride.name}${form.groom.name ? ` & ${form.groom.name}` : ''}`,
-      form: JSON.parse(JSON.stringify(form)),
-      status: 'New',
-    };
-    if (!addOrder(order)) { showToast('Could not save — your device storage is full. Please clear some space and try again.', 'error'); return; }
+    if (submitting) return;
+    setSubmitting(true);
+    const couple = `${form.bride.name}${form.groom.name ? ` & ${form.groom.name}` : ''}`;
+    const order = await addOrder(couple, JSON.parse(JSON.stringify(form)));
+    setSubmitting(false);
+    if (!order) { showToast('Could not save your order — check your connection and try again.', 'error'); return; }
     setSubmitted(order);
     try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
   };
@@ -418,10 +492,10 @@ function CustomerFlow({ c, dark, addOrder, onBack }: { c: Palette; dark: boolean
               {step === 4 && <StepExtras form={form} update={update} c={c} />}
               {step === 5 && <StepDesign form={form} update={update} c={c} dark={dark} />}
               {step === 6 && <StepPreview form={form} update={update} c={c} dark={dark} />}
-              {step === 7 && <StepSubmit form={form} update={update} c={c} onSubmit={submit} setStep={setStep} />}
+              {step === 7 && <StepSubmit form={form} update={update} c={c} onSubmit={submit} setStep={setStep} submitting={submitting} />}
             </motion.div>
           </AnimatePresence>
-          <NavButtons step={step} prev={prev} next={next} onSubmit={submit} c={c} canNext={canNext} />
+          <NavButtons step={step} prev={prev} next={next} onSubmit={submit} c={c} canNext={canNext} submitting={submitting} />
         </div>
 
         <div className="lg:col-span-5">
@@ -577,7 +651,7 @@ function Stepper({ step, setStep, c, dark, saving, offline }: { step: number; se
 }
 
 /* ─── Nav Buttons ────────────────────────────────────────────────────────── */
-function NavButtons({ step, prev, next, onSubmit, c, canNext }: { step: number; prev: () => void; next: () => void; onSubmit: () => void; c: Palette; canNext: boolean }) {
+function NavButtons({ step, prev, next, onSubmit, c, canNext, submitting }: { step: number; prev: () => void; next: () => void; onSubmit: () => void; c: Palette; canNext: boolean; submitting?: boolean }) {
   const hint = !canNext && VALIDATION_HINTS[step];
   return (
     <div className="mt-6 space-y-3">
@@ -600,10 +674,11 @@ function NavButtons({ step, prev, next, onSubmit, c, canNext }: { step: number; 
             Continue <ChevronRight className="w-4 h-4" />
           </motion.button>
         ) : (
-          <motion.button onClick={onSubmit} whileTap={{ scale: 0.96 }} whileHover={{ scale: 1.02 }}
-            className="flex items-center gap-2 px-8 py-3.5 rounded-full text-sm font-bold text-white shadow-2xl tracking-wide"
+          <motion.button onClick={onSubmit} disabled={submitting} whileTap={{ scale: 0.96 }} whileHover={{ scale: 1.02 }}
+            className="flex items-center gap-2 px-8 py-3.5 rounded-full text-sm font-bold text-white shadow-2xl tracking-wide disabled:opacity-70"
             style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})`, boxShadow: `0 12px 36px -10px ${c.primary}70` }}>
-            Submit to Designer <Send className="w-4 h-4" />
+            {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            {submitting ? 'Submitting…' : 'Submit to Designer'}
           </motion.button>
         )}
       </div>
@@ -1156,7 +1231,7 @@ function StepPreview({ form, update, c, dark }: { form: FormState; update: (path
 }
 
 /* ─── Step 7: Submit ─────────────────────────────────────────────────────── */
-function StepSubmit({ form, update, c, onSubmit, setStep }: { form: FormState; update: (path: string, value: unknown) => void; c: Palette; onSubmit: () => void; setStep: (n: number) => void }) {
+function StepSubmit({ form, update, c, onSubmit, setStep, submitting }: { form: FormState; update: (path: string, value: unknown) => void; c: Palette; onSubmit: () => void; setStep: (n: number) => void; submitting?: boolean }) {
   const template = INVITATION_TEMPLATES.find(t => t.id === form.selectedTemplate);
   const closing = CLOSING_TAGS.find(t => t.id === form.closingTag);
   const sections = [
@@ -1191,7 +1266,7 @@ function StepSubmit({ form, update, c, onSubmit, setStep }: { form: FormState; u
       </div>
       <label className="flex items-start gap-3 p-5 rounded-2xl border-2 cursor-pointer transition-all"
         style={{ borderColor: form.meta.accepted ? c.gold : c.border, background: form.meta.accepted ? `${c.gold}10` : 'rgba(255,255,255,0.35)' }}>
-        <input type="checkbox" checked={form.meta.accepted} onChange={e => update('meta.accepted', e.target.checked)} className="mt-1 w-4 h-4 shrink-0" style={{ accentColor: c.gold }} />
+        <input type="checkbox" checked={form.meta.accepted} disabled={submitting} onChange={e => update('meta.accepted', e.target.checked)} className="mt-1 w-4 h-4 shrink-0" style={{ accentColor: c.gold }} />
         <div>
           <div className="text-sm font-bold leading-snug" style={{ color: c.text }}>I have checked all details and confirm they are correct</div>
           <div className="text-xs mt-1 leading-snug font-medium" style={{ color: c.subtext }}>The designer will use this content exactly as shown. Proofread all names and dates.</div>
@@ -1461,7 +1536,7 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
 }
 
 /* ─── Admin Dashboard ────────────────────────────────────────────────────── */
-function AdminDashboard({ c, dark, orders, setOrders }: { c: Palette; dark: boolean; orders: SubmittedOrder[]; setOrders: (o: SubmittedOrder[]) => void }) {
+function AdminDashboard({ c, dark, orders, ordersLoading, onStatusChange, onDelete }: { c: Palette; dark: boolean; orders: SubmittedOrder[]; ordersLoading: boolean; onStatusChange: (orderId: string, status: SubmittedOrder['status']) => void; onDelete: (orderId: string) => void }) {
   const [filter, setFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<SubmittedOrder | null>(null);
@@ -1473,12 +1548,11 @@ function AdminDashboard({ c, dark, orders, setOrders }: { c: Palette; dark: bool
   );
 
   const updateStatus = (orderId: string, status: SubmittedOrder['status']) => {
-    const updated = orders.map(o => o.orderId === orderId ? { ...o, status } : o);
-    setOrders(updated);
+    onStatusChange(orderId, status);
     if (selected?.orderId === orderId) setSelected(prev => prev ? { ...prev, status } : null);
   };
 
-  const deleteOrder = (orderId: string) => { setOrders(orders.filter(o => o.orderId !== orderId)); if (selected?.orderId === orderId) setSelected(null); };
+  const deleteOrder = (orderId: string) => { onDelete(orderId); if (selected?.orderId === orderId) setSelected(null); };
 
   const stats = [
     { label: 'Total',       value: orders.length,                                icon: Package,      gradient: [c.gold, c.goldDeep] },
@@ -1546,7 +1620,11 @@ function AdminDashboard({ c, dark, orders, setOrders }: { c: Palette; dark: bool
           </div>
         </div>
 
-        {orders.length === 0 ? (
+        {ordersLoading ? (
+          <div className="text-center py-20">
+            <Loader2 className="w-6 h-6 animate-spin mx-auto" style={{ color: c.gold }} />
+          </div>
+        ) : orders.length === 0 ? (
           <div className="text-center py-20">
             <div className="text-5xl mb-4">📭</div>
             <div className="font-medium mb-2" style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '1.6rem', color: c.text }}>No orders yet</div>

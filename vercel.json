@@ -1,0 +1,6 @@
+{
+  "installCommand": "pnpm install",
+  "buildCommand": "pnpm --filter @workspace/wedding-matter-pro run build",
+  "outputDirectory": "artifacts/wedding-matter-pro/dist/public",
+  "framework": null
+}
