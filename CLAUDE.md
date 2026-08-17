@@ -4,12 +4,11 @@ Premium wedding invitation card studio — customers fill an 8-step wizard to se
 
 ## Status (2026-08-17)
 
-Two changes landed together: (1) migrating off `localStorage` onto Supabase, so the app is centrally stored, live-synced across devices, and has a real admin login; (2) detaching the whole project from Replit — it now runs from a plain local Node/pnpm setup, no Replit account or shell required.
+Three changes landed: (1) migrating off `localStorage` onto Supabase, so the app is centrally stored, live-synced across devices, and has a real admin login; (2) detaching the whole project from Replit — it now runs from a plain local Node/pnpm setup, no Replit account or shell required; (3) live Supabase project created and the full flow (customer submit → admin login → see order → delete) confirmed working end-to-end.
 
-- **Done:** Supabase schema written (`supabase/schema.sql`), frontend wired to it (`src/lib/supabase.ts`, `src/lib/orders.ts`, `src/lib/auth.ts`), admin dashboard gated behind Supabase Auth login, realtime sync so multiple staff see new orders live. Node.js 24 + pnpm installed locally; all `@replit/*` plugins, `.replit`, `.replitignore`, `replit.md`, and every `.replit-artifact/` config removed; `pnpm install` and the dev server both verified working locally on Windows.
-- **Not done yet:** nobody has created the actual Supabase project. The code assumes `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` exist and degrades to "orders can't be saved" if they don't (see **Setup**). No production hosting chosen yet either (was going to be Replit; now needs Vercel/Netlify — see **Roadmap**).
-- **Action needed from the owner:** the deleted `.replit` file had two OpenAI API keys committed in plaintext. Rotate them at platform.openai.com if you haven't — deleting the file stops future exposure but they're still readable in old git commits (kept as-is; a history rewrite was explicitly declined).
-- **Not committed to git yet** as of this writing — review the diff before committing/pushing.
+- **Done:** Supabase project live (`lnbxqxgrgvmpndhcyuyj.supabase.co`), schema applied, admin user created (`j.p.papertradeconverters@gmail.com`) and login tested working. `create_order()` RPC and RLS lockout both verified directly against the REST API — anon can create orders but can't read the table; admin can. Node.js 24 + pnpm installed locally; all `@replit/*` plugins, `.replit`, `.replitignore`, `replit.md`, and every `.replit-artifact/` config removed. `pnpm install`, typecheck, dev server, and a real production build all verified working locally on Windows. `vercel.json` added for one-step deployment. Committed and pushed to `main`.
+- **Not done yet:** no production hosting/domain yet (see **Roadmap** — Vercel + a purchased domain is next).
+- **Action needed from the owner:** the deleted `.replit` file had two OpenAI API keys committed in plaintext, still readable in old git commits (a history rewrite was explicitly declined). Rotate them at platform.openai.com whenever you're back in that account — not urgent since nothing calls them currently.
 
 ## Run & Operate
 
@@ -21,13 +20,15 @@ Runs entirely locally now — no Replit shell needed.
 
 Node.js 24 LTS and pnpm (via the standalone installer, not corepack — corepack needed admin rights this machine didn't have interactively) are installed under the current Windows user account. A fresh terminal should have `node`/`pnpm` on `PATH` automatically (the pnpm installer registered `PNPM_HOME` at the user level); if a shell somehow doesn't see them, open a new terminal window first before assuming something's broken.
 
-## Setup (do this once, per environment)
+## Setup (done for this project's Supabase project — steps below for a NEW environment, e.g. a second developer's machine or a from-scratch redo)
 
 1. **Create a Supabase project** at supabase.com (free tier is enough for a small business). Note its Project URL and anon/public API key from *Project Settings → API*.
 2. **Run the schema**: Supabase Dashboard → SQL Editor → paste the entire contents of `supabase/schema.sql` → Run. Safe to re-run if you need to.
-3. **Create your admin login**: Dashboard → Authentication → Users → Add user. Use your own email + a password. This is the only account that can see the Admin dashboard — there is no public sign-up.
-4. **Set the env vars** — copy `artifacts/wedding-matter-pro/.env.example` to `.env` in that same folder and fill in the two values. (Whatever hosting is chosen in Roadmap step 2 will need the same two vars set as its own env/secrets config.)
+3. **Create your admin login**: Dashboard → Authentication → Users → Add user. Use your own email + a password (Supabase never surfaces it again after creation — if forgotten, reset it from the user's row in the dashboard rather than trying to recover it). This is the only account that can see the Admin dashboard — there is no public sign-up.
+4. **Set the env vars** — copy `artifacts/wedding-matter-pro/.env.example` to `.env` in that same folder and fill in the two values. Production hosting (Roadmap step 3) will need the same two vars set as its own env/secrets config.
 5. Load the app, click **Admin**, sign in with the account from step 3.
+
+This project's own Supabase instance is already fully set up — a fresh clone just needs its own `.env` (step 4) pointed at the existing project; steps 1–3 only apply when standing up a brand new Supabase project.
 
 ## Where things live
 
@@ -63,11 +64,11 @@ Node.js 24 LTS and pnpm (via the standalone installer, not corepack — corepack
 
 ## Roadmap (small-business rebuild plan)
 
-1. ~~Supabase schema + wire order storage + admin auth~~ ← done
+1. ~~Supabase schema + wire order storage + admin auth~~ ← done, live project, end-to-end tested
 2. ~~Detach from Replit — local Node/pnpm setup, remove all Replit-specific config~~ ← done
-3. Deploy client + admin to a domain: Vercel or Netlify (frontend), custom domain via Namecheap/Cloudflare pointed at it
+3. **Deploy client + admin to a domain** ← next: Vercel (frontend), custom domain via Namecheap/Cloudflare pointed at it. `vercel.json` is already in place; needs the owner's Vercel account + a purchased domain.
 4. Decide on the orphaned AI photo-extraction feature (`artifacts/api-server`) — reconnect as a Supabase Edge Function calling OpenAI (with a freshly rotated key — see **Status**), or delete it, once the owner decides it's worth the API cost
-5. Once Supabase + deployment are confirmed solid, delete the now-unused `artifacts/api-server`, `lib/db`, `lib/api-zod`, `lib/api-client-react`, and `artifacts/mockup-sandbox` packages to actually shrink the stack
+5. Once deployment is confirmed solid, delete the now-unused `artifacts/api-server`, `lib/db`, `lib/api-zod`, `lib/api-client-react`, and `artifacts/mockup-sandbox` packages to actually shrink the stack
 
 ## Gotchas
 
