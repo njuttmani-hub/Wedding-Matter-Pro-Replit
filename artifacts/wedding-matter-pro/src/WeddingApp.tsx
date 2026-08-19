@@ -1695,34 +1695,66 @@ function OrderModal({ order, onClose, c, dark, cardSizeId, onStatusChange, onDel
   const corel = generateCorelText(order.form);
   const [copied, setCopied] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [downloading, setDownloading] = useState(false);
+  const [downloadingPng, setDownloadingPng] = useState(false);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
   const previewRef = useRef<HTMLDivElement>(null);
   const copy = () => { navigator.clipboard?.writeText(corel); setCopied(true); setTimeout(() => setCopied(false), 1500); };
   const sizeConf = CARD_SIZES.find(s => s.id === cardSizeId);
   // wa.me can only pre-fill text, never an image — so the full matter goes as text;
   // the card image (below) is a separate manual attach step in WhatsApp.
   const shareWA = () => { const text = encodeURIComponent(`🌹 *Order ${order.orderId}* — ${order.couple}\n\n${corel}`); window.open(`https://wa.me/?text=${text}`, '_blank'); };
-  const downloadImage = async () => {
-    if (!previewRef.current || downloading) return;
-    setDownloading(true);
+  const fileBase = `${order.orderId}-${order.couple.replace(/\s+/g, '-')}`;
+  const downloadPng = async () => {
+    if (!previewRef.current || downloadingPng) return;
+    setDownloadingPng(true);
     try {
       const { default: html2canvas } = await import('html2canvas');
       const canvas = await html2canvas(previewRef.current, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
       const link = document.createElement('a');
-      link.download = `${order.orderId}-${order.couple.replace(/\s+/g, '-')}.png`;
+      link.download = `${fileBase}.png`;
       link.href = canvas.toDataURL('image/png');
       link.click();
     } finally {
-      setDownloading(false);
+      setDownloadingPng(false);
+    }
+  };
+  // Each physical card page (Page 1, Page 2 programmes) becomes its own PDF page,
+  // sized in pixels 1:1 to the captured canvas so nothing gets stretched or clipped.
+  const downloadPdf = async () => {
+    if (!previewRef.current || downloadingPdf) return;
+    setDownloadingPdf(true);
+    try {
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import('html2canvas'), import('jspdf')]);
+      const pages = Array.from(previewRef.current.children) as HTMLElement[];
+      let doc: InstanceType<typeof jsPDF> | null = null;
+      for (const pageEl of pages) {
+        const canvas = await html2canvas(pageEl, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
+        const orientation = canvas.width > canvas.height ? 'l' : 'p';
+        if (!doc) {
+          doc = new jsPDF({ orientation, unit: 'px', format: [canvas.width, canvas.height], hotfixes: ['px_scaling'] });
+        } else {
+          doc.addPage([canvas.width, canvas.height], orientation);
+        }
+        doc.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, canvas.width, canvas.height);
+      }
+      doc?.save(`${fileBase}.pdf`);
+    } finally {
+      setDownloadingPdf(false);
     }
   };
 
   const DeleteButtons = (
     <div className="mt-3 space-y-2">
-      <button onClick={downloadImage} disabled={downloading} className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-sm font-bold border transition hover:opacity-80 disabled:opacity-60"
-        style={{ borderColor: c.border, color: c.text, background: 'rgba(255,255,255,0.5)' }}>
-        {downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} {downloading ? 'Preparing image…' : 'Download Card Image'}
-      </button>
+      <div className="grid grid-cols-2 gap-2">
+        <button onClick={downloadPng} disabled={downloadingPng} className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-sm font-bold border transition hover:opacity-80 disabled:opacity-60"
+          style={{ borderColor: c.border, color: c.text, background: 'rgba(255,255,255,0.5)' }}>
+          {downloadingPng ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} {downloadingPng ? 'Preparing…' : 'PNG Image'}
+        </button>
+        <button onClick={downloadPdf} disabled={downloadingPdf} className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-sm font-bold border transition hover:opacity-80 disabled:opacity-60"
+          style={{ borderColor: c.border, color: c.text, background: 'rgba(255,255,255,0.5)' }}>
+          {downloadingPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />} {downloadingPdf ? 'Preparing…' : 'PDF File'}
+        </button>
+      </div>
       <div className="grid grid-cols-2 gap-2">
       <button onClick={shareWA} className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-white text-sm font-bold transition hover:opacity-90"
         style={{ background: 'linear-gradient(135deg, #1DA851, #128C3E)' }}>
