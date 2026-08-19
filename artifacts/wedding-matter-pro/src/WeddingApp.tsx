@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Session } from '@supabase/supabase-js';
 import {
@@ -8,7 +8,7 @@ import {
   Smartphone, Monitor, Printer, ArrowUp, ArrowDown, User, Package,
   Bell, Palette as PaletteIcon, Star, BookOpen,
   MessageCircle, Zap, Info, ArrowLeftRight, CloudOff, Save, Maximize2,
-  LogOut, Lock, Loader2
+  LogOut, Lock, Loader2, Download
 } from 'lucide-react';
 import type { Palette, FormState, PersonInfo, Programme, SubmittedOrder } from './types';
 import {
@@ -312,37 +312,37 @@ function Atmosphere({ c }: { c: Palette }) {
 function Nav({ mode, setMode, dark, setDark, c, orderCount, session, onSignOut }: { mode: string; setMode: (m: 'customer' | 'admin') => void; dark: boolean; setDark: (d: boolean) => void; c: Palette; orderCount: number; session: Session | null; onSignOut: () => void }) {
   return (
     <nav className="relative z-20 border-b" style={{ borderColor: c.border, background: c.surface, backdropFilter: 'blur(24px)' }}>
-      <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-full flex items-center justify-center shadow-lg" style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}>
-            <Heart className="w-4 h-4 text-white" />
+      <div className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 min-h-16 py-2 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center shadow-lg shrink-0" style={{ background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}>
+            <Heart className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" />
           </div>
-          <div>
-            <div className="font-bold leading-none" style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '1.2rem', color: c.text }}>Wedding Matter Pro</div>
-            <div className="text-[9px] uppercase tracking-[0.3em] opacity-45">Premium Card Studio</div>
+          <div className="min-w-0">
+            <div className="font-bold leading-none truncate" style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 'clamp(0.95rem, 4vw, 1.2rem)', color: c.text }}>Wedding Matter Pro</div>
+            <div className="hidden sm:block text-[9px] uppercase tracking-[0.3em] opacity-45">Premium Card Studio</div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           <div className="flex rounded-full border p-0.5" style={{ borderColor: c.border }}>
-            <button onClick={() => setMode('customer')} className="px-4 py-1.5 rounded-full text-[12px] font-bold transition-all"
+            <button onClick={() => setMode('customer')} className="flex items-center gap-1.5 px-2.5 sm:px-4 py-1.5 rounded-full text-[12px] font-bold transition-all"
               style={{ background: mode === 'customer' ? `linear-gradient(135deg, ${c.primary}, ${c.gold})` : 'transparent', color: mode === 'customer' ? 'white' : c.subtext }}>
-              Customer
+              <Heart className="w-3.5 h-3.5 sm:hidden" /> <span className="hidden sm:inline">Customer</span>
             </button>
-            <button onClick={() => setMode('admin')} className="px-4 py-1.5 rounded-full text-[12px] font-bold transition-all flex items-center gap-1.5 relative"
+            <button onClick={() => setMode('admin')} className="flex items-center gap-1.5 px-2.5 sm:px-4 py-1.5 rounded-full text-[12px] font-bold transition-all relative"
               style={{ background: mode === 'admin' ? `linear-gradient(135deg, ${c.primary}, ${c.gold})` : 'transparent', color: mode === 'admin' ? 'white' : c.subtext }}>
-              <LayoutDashboard className="w-3.5 h-3.5" /> Admin
+              <LayoutDashboard className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Admin</span>
               {orderCount > 0 && (
                 <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full text-[9px] font-bold text-white flex items-center justify-center" style={{ background: c.accent }}>{orderCount}</span>
               )}
             </button>
           </div>
           {mode === 'admin' && session && (
-            <button onClick={onSignOut} title="Sign out" className="w-9 h-9 rounded-full flex items-center justify-center border transition-all hover:scale-110" style={{ borderColor: c.border, background: c.surface }}>
-              <LogOut className="w-4 h-4" style={{ color: c.subtext }} />
+            <button onClick={onSignOut} title="Sign out" className="w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center border transition-all hover:scale-110 shrink-0" style={{ borderColor: c.border, background: c.surface }}>
+              <LogOut className="w-3.5 h-3.5 sm:w-4 sm:h-4" style={{ color: c.subtext }} />
             </button>
           )}
-          <button onClick={() => setDark(!dark)} className="w-9 h-9 rounded-full flex items-center justify-center border transition-all hover:scale-110" style={{ borderColor: c.border, background: c.surface }}>
-            {dark ? <Sun className="w-4 h-4" style={{ color: c.gold }} /> : <Moon className="w-4 h-4" style={{ color: c.primary }} />}
+          <button onClick={() => setDark(!dark)} className="w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center border transition-all hover:scale-110 shrink-0" style={{ borderColor: c.border, background: c.surface }}>
+            {dark ? <Sun className="w-3.5 h-3.5 sm:w-4 sm:h-4" style={{ color: c.gold }} /> : <Moon className="w-3.5 h-3.5 sm:w-4 sm:h-4" style={{ color: c.primary }} />}
           </button>
         </div>
       </div>
@@ -751,14 +751,14 @@ function Select({ c, children, className = '', ...props }: React.SelectHTMLAttri
 function SalutNameField({ label, salValue, salPath, nameValue, namePath, namePlaceholder, required, update, c }: { label: string; salValue: string; salPath: string; nameValue: string; namePath: string; namePlaceholder?: string; required?: boolean; update: (path: string, value: unknown) => void; c: Palette }) {
   return (
     <Field label={label} required={required} c={c}>
-      <div className="flex gap-2">
+      <div className="flex flex-col @sm:flex-row gap-1.5 @sm:gap-2">
         <select value={salValue} onChange={e => update(salPath, e.target.value)}
-          className="shrink-0 px-3 py-3 rounded-2xl text-sm font-medium outline-none appearance-none cursor-pointer"
+          className="shrink-0 self-start px-3 py-3 rounded-2xl text-sm font-medium outline-none appearance-none cursor-pointer"
           style={{ width: '130px', background: `${c.gold}15`, border: `1.5px solid ${c.gold}60`, color: c.gold }}>
           <option value="">—</option>
           {SALUTATIONS.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
-        <Input c={c} className="flex-1" value={nameValue} onChange={e => update(namePath, e.target.value)} placeholder={namePlaceholder} />
+        <Input c={c} className="flex-1 min-w-0" value={nameValue} onChange={e => update(namePath, e.target.value)} placeholder={namePlaceholder} />
       </div>
     </Field>
   );
@@ -845,7 +845,7 @@ function StepFamily({ form, update, setForm, c, dark }: { form: FormState; updat
         </Field>
       </div>
 
-      <div className="grid sm:grid-cols-2 gap-5">
+      <div className="grid md:grid-cols-2 gap-5">
         <PersonCard side="Bride" person={form.bride} update={update} prefix="bride" c={c} />
         <PersonCard side="Groom" person={form.groom} update={update} prefix="groom" c={c} />
       </div>
@@ -865,7 +865,7 @@ function StepFamily({ form, update, setForm, c, dark }: { form: FormState; updat
 function PersonCard({ side, person, update, prefix, c }: { side: string; person: PersonInfo; update: (path: string, value: unknown) => void; prefix: string; c: Palette }) {
   const isBride = side === 'Bride';
   return (
-    <div className="rounded-2xl p-5 border relative overflow-hidden" style={{ borderColor: c.border, background: `linear-gradient(180deg, ${isBride ? c.primary : c.gold}08, transparent)` }}>
+    <div className="@container rounded-2xl p-5 border relative overflow-hidden" style={{ borderColor: c.border, background: `linear-gradient(180deg, ${isBride ? c.primary : c.gold}08, transparent)` }}>
       <div className="absolute top-3 right-3 text-2xl opacity-20 select-none">{isBride ? '👰' : '🤵'}</div>
       <div className="text-xs font-bold uppercase tracking-[0.3em] mb-4" style={{ color: isBride ? c.primary : c.goldDeep }}>
         {isBride ? '👰' : '🤵'} {side}
@@ -881,14 +881,14 @@ function PersonCard({ side, person, update, prefix, c }: { side: string; person:
             <span className="px-1.5 py-0.5 rounded text-[10px] font-black" style={{ background: `${c.gold}25`, color: c.gold }}>{isBride ? 'D/o' : 'S/o'}</span>
             Father's Name
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-col @sm:flex-row gap-1.5 @sm:gap-2">
             <select value={person.fatherPrefix} onChange={e => update(`${prefix}.fatherPrefix`, e.target.value)}
-              className="shrink-0 px-3 py-3 rounded-2xl text-sm font-medium outline-none appearance-none cursor-pointer"
+              className="shrink-0 self-start px-3 py-3 rounded-2xl text-sm font-medium outline-none appearance-none cursor-pointer"
               style={{ width: '120px', background: `${c.gold}15`, border: `1.5px solid ${c.gold}60`, color: c.gold }}>
               <option value="">—</option>
               {SALUTATIONS.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
-            <Input c={c} className="flex-1" value={person.fatherName} onChange={e => update(`${prefix}.fatherName`, e.target.value)} placeholder={isBride ? 'Rajesh Sharma' : 'Mahesh Mehta'} />
+            <Input c={c} className="flex-1 min-w-0" value={person.fatherName} onChange={e => update(`${prefix}.fatherName`, e.target.value)} placeholder={isBride ? 'Rajesh Sharma' : 'Mahesh Mehta'} />
           </div>
         </div>
         {/* Mother */}
@@ -1291,10 +1291,14 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
   const aboveRelation = form.aboveWeds === 'bride' ? 'D/o' : 'S/o';
   const belowRelation = form.aboveWeds === 'bride' ? 'S/o' : 'D/o';
 
-  // Card size constraints for admin
+  // Card size sets a *minimum* height matching the real print proportions — using
+  // aspectRatio directly would lock the box to that height and silently clip any
+  // matter that doesn't fit, hiding content from the designer. minHeight (via a
+  // container-query width unit, so it tracks the box's own rendered width) lets the
+  // box grow taller automatically whenever there's more matter than the nominal size holds.
   const sizeConf = CARD_SIZES.find(s => s.id === sizeId);
   const aspectStyle: React.CSSProperties = sizeConf
-    ? { aspectRatio: `${sizeConf.widthIn} / ${sizeConf.heightIn}` }
+    ? { minHeight: `calc(100cqw * ${sizeConf.heightIn} / ${sizeConf.widthIn})` }
     : {};
 
   // White card background for maximum legibility
@@ -1440,7 +1444,7 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
   ) : null;
 
   return (
-    <div className="space-y-3">
+    <div className="@container space-y-3">
       {/* Page 1 */}
       <div className="rounded-2xl overflow-hidden shadow-2xl relative" style={{ background: cardBg, color: '#111111', ...aspectStyle }}>
         {layout !== 'modern' && (
@@ -1691,12 +1695,35 @@ function OrderModal({ order, onClose, c, dark, cardSizeId, onStatusChange, onDel
   const corel = generateCorelText(order.form);
   const [copied, setCopied] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const previewRef = useRef<HTMLDivElement>(null);
   const copy = () => { navigator.clipboard?.writeText(corel); setCopied(true); setTimeout(() => setCopied(false), 1500); };
   const sizeConf = CARD_SIZES.find(s => s.id === cardSizeId);
-  const shareWA = () => { const text = encodeURIComponent(`🌹 *Order ${order.orderId}*\n*Couple:* ${order.couple}\n*Status:* ${order.status}\n*Submitted:* ${order.at}\n\n_Wedding Matter Pro_`); window.open(`https://wa.me/?text=${text}`, '_blank'); };
+  // wa.me can only pre-fill text, never an image — so the full matter goes as text;
+  // the card image (below) is a separate manual attach step in WhatsApp.
+  const shareWA = () => { const text = encodeURIComponent(`🌹 *Order ${order.orderId}* — ${order.couple}\n\n${corel}`); window.open(`https://wa.me/?text=${text}`, '_blank'); };
+  const downloadImage = async () => {
+    if (!previewRef.current || downloading) return;
+    setDownloading(true);
+    try {
+      const { default: html2canvas } = await import('html2canvas');
+      const canvas = await html2canvas(previewRef.current, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
+      const link = document.createElement('a');
+      link.download = `${order.orderId}-${order.couple.replace(/\s+/g, '-')}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const DeleteButtons = (
-    <div className="grid grid-cols-2 gap-2 mt-3">
+    <div className="mt-3 space-y-2">
+      <button onClick={downloadImage} disabled={downloading} className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-sm font-bold border transition hover:opacity-80 disabled:opacity-60"
+        style={{ borderColor: c.border, color: c.text, background: 'rgba(255,255,255,0.5)' }}>
+        {downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} {downloading ? 'Preparing image…' : 'Download Card Image'}
+      </button>
+      <div className="grid grid-cols-2 gap-2">
       <button onClick={shareWA} className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-white text-sm font-bold transition hover:opacity-90"
         style={{ background: 'linear-gradient(135deg, #1DA851, #128C3E)' }}>
         <MessageCircle className="w-4 h-4" /> WhatsApp
@@ -1711,6 +1738,7 @@ function OrderModal({ order, onClose, c, dark, cardSizeId, onStatusChange, onDel
           <Trash2 className="w-4 h-4" /> Delete Order
         </button>
       )}
+      </div>
     </div>
   );
 
@@ -1746,7 +1774,9 @@ function OrderModal({ order, onClose, c, dark, cardSizeId, onStatusChange, onDel
               <div className="text-[10px] font-bold uppercase tracking-[0.25em]" style={{ color: c.gold }}>Card Preview</div>
               {sizeConf && <span className="text-[10px] px-2 py-0.5 rounded-full font-bold" style={{ background: `${c.gold}15`, color: c.gold }}>{sizeConf.label}</span>}
             </div>
-            <CardPreview form={order.form} c={c} dark={dark} compact sizeId={cardSizeId} />
+            <div ref={previewRef}>
+              <CardPreview form={order.form} c={c} dark={dark} compact sizeId={cardSizeId} />
+            </div>
           </div>
           <div>
             <div className="flex items-center justify-between mb-3">
