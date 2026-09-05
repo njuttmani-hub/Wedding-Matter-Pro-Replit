@@ -3229,6 +3229,104 @@ function openMailDraft(subject: string, body: string, fallback: string) {
   window.open(url.length > 7500 ? build(fallback) : url, '_blank', 'noopener');
 }
 
+/** Every card page under `root`, rendered once. html2canvas is the expensive
+ *  part of an export, so the PNGs and the PDF are both built from these rather
+ *  than rendering the card twice. */
+async function cardCanvases(root: HTMLElement): Promise<HTMLCanvasElement[]> {
+  const { default: html2canvas } = await import('html2canvas');
+  // Each rendered card page carries .wmp-card-page. Selecting on that rather
+  // than root.children matters: the ref wraps CardPreview, whose own root is a
+  // single spacing container, so children[] is one element holding both pages.
+  const pages = Array.from(root.querySelectorAll<HTMLElement>('.wmp-card-page'));
+  const targets = pages.length ? pages : [root];
+  const out: HTMLCanvasElement[] = [];
+  for (const el of targets) {
+    out.push(await html2canvas(el, { scale: 2, backgroundColor: '#ffffff', useCORS: true }));
+  }
+  return out;
+}
+
+/** The card as shareable files: one PNG per page, plus a single PDF holding
+ *  every page. Both formats go along because they get used differently — the
+ *  PNGs preview inline in a chat or mail body, the PDF is what a printer or
+ *  designer wants. PDF pages are sized 1:1 in pixels to their canvas so
+ *  nothing is stretched or clipped, matching the standalone PDF export. */
+async function cardFiles(root: HTMLElement, base: string): Promise<File[]> {
+  const canvases = await cardCanvases(root);
+  if (!canvases.length) return [];
+  const files: File[] = [];
+  for (let i = 0; i < canvases.length; i++) {
+    const blob = await new Promise<Blob | null>(res => canvases[i].toBlob(res, 'image/png'));
+    if (blob) {
+      const name = canvases.length > 1 ? `${base}-page-${i + 1}.png` : `${base}.png`;
+      files.push(new File([blob], name, { type: 'image/png' }));
+    }
+  }
+  const { jsPDF } = await import('jspdf');
+  let doc: InstanceType<typeof jsPDF> | null = null;
+  for (const canvas of canvases) {
+    const orientation = canvas.width > canvas.height ? 'l' : 'p';
+    if (!doc) {
+      doc = new jsPDF({ orientation, unit: 'px', format: [canvas.width, canvas.height], hotfixes: ['px_scaling'] });
+    } else {
+      doc.addPage([canvas.width, canvas.height], orientation);
+    }
+    doc.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, canvas.width, canvas.height);
+  }
+  if (doc) files.push(new File([doc.output('blob')], `${base}.pdf`, { type: 'application/pdf' }));
+  return files;
+}
+
+/** Whether the OS share sheet will both carry these files AND be likely to
+ *  offer Gmail or WhatsApp — in practice, a phone. Desktop Chrome also reports
+ *  it can share files, but the Windows sheet lists installed apps only, so the
+ *  studio would be offered Mail and OneNote rather than Gmail; there the mail
+ *  draft plus a download is the more useful path. */
+function canShareCardFiles(files: File[]): boolean {
+  const uaMobile = (navigator as unknown as { userAgentData?: { mobile?: boolean } }).userAgentData?.mobile;
+  const mobile = uaMobile ?? /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  return mobile && typeof navigator.share === 'function' && !!navigator.canShare?.({ files });
+}
+
+function downloadFiles(files: File[]) {
+  for (const f of files) {
+    const url = URL.createObjectURL(f);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = f.name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+}
+
+/** Sends the matter and the card files together.
+ *
+ *  On a phone the OS share sheet takes text and files in one go, so picking
+ *  Gmail or WhatsApp there genuinely attaches the card. Anywhere else this is
+ *  not possible from a web page: neither `mailto:` nor Gmail's compose URL
+ *  accepts an attachment, and no site can attach to Gmail without the Gmail
+ *  API and an OAuth consent flow. So the desktop path saves the files and
+ *  opens the draft, leaving one drag to the user rather than pretending the
+ *  attachment happened. Returns which of the two actually ran. */
+async function shareMatterAndCard(opts: {
+  root: HTMLElement; base: string; subject: string; body: string; fallback: string;
+}): Promise<'shared' | 'downloaded'> {
+  const files = await cardFiles(opts.root, opts.base);
+  if (files.length && canShareCardFiles(files)) {
+    try {
+      await navigator.share({ files, title: opts.subject, text: opts.body });
+      return 'shared';
+    } catch (err) {
+      // Dismissing the sheet is a choice, not a failure — don't then dump
+      // downloads and a mail draft on someone who just backed out.
+      if ((err as Error)?.name === 'AbortError') return 'shared';
+    }
+  }
+  downloadFiles(files);
+  openMailDraft(opts.subject, opts.body, opts.fallback);
+  return 'downloaded';
+}
+
 /* ─── Success ────────────────────────────────────────────────────────────── */
 function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOrder; c: Palette; form: FormState; dark: boolean; onReset: () => void }) {
   const corel = generateCorelText(form);
@@ -3236,6 +3334,8 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
   const [idCopied, setIdCopied] = useState(false);
   const [showExport, setShowExport] = useState(false);
   const [downloadingPng, setDownloadingPng] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [shareHint, setShareHint] = useState<'shared' | 'downloaded' | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const reduce = usePrefersReducedMotion();
   const copy = () => { navigator.clipboard?.writeText(corel); setCopied(true); setTimeout(() => setCopied(false), 1600); };
@@ -3257,14 +3357,22 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
       setDownloadingPng(false);
     }
   };
-  const shareEmail = () => {
-    const couple = [form.bride.name, form.groom.name].filter(Boolean).join(' & ');
-    const heading = `Order Number: ${submitted.orderId}\nCouple: ${couple || '—'}\nSubmitted: ${submitted.at}`;
-    openMailDraft(
-      `Wedding Matter ${submitted.orderId}${couple ? ` — ${couple}` : ''}`,
-      `${heading}\n\n${corel}\n\n— Wedding Matter Pro`,
-      `${heading}\n\nThe full matter was too long for one draft. Use "Copy Export" on the confirmation page and paste it below this line.\n\n— Wedding Matter Pro`,
-    );
+  const shareEmail = async () => {
+    if (!previewRef.current || sharing) return;
+    setSharing(true);
+    try {
+      const couple = [form.bride.name, form.groom.name].filter(Boolean).join(' & ');
+      const heading = `Order Number: ${submitted.orderId}\nCouple: ${couple || '—'}\nSubmitted: ${submitted.at}`;
+      setShareHint(await shareMatterAndCard({
+        root: previewRef.current,
+        base: fileBase,
+        subject: `Wedding Matter ${submitted.orderId}${couple ? ` — ${couple}` : ''}`,
+        body: `${heading}\n\n${corel}\n\n— Wedding Matter Pro`,
+        fallback: `${heading}\n\nThe full matter was too long for one draft. Use "Copy Export" on the confirmation page and paste it below this line.\n\n— Wedding Matter Pro`,
+      }));
+    } finally {
+      setSharing(false);
+    }
   };
   const shareWA = () => {
     const text = encodeURIComponent(`🌹 *New Wedding Matter Order*\n\n*Order ID:* ${submitted.orderId}\n*Couple:* ${form.bride.name} ❤️ ${form.groom.name}\n*Submitted:* ${submitted.at}\n\n_Wedding Matter Pro_`);
@@ -3367,11 +3475,13 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
           <MessageCircle className="w-5 h-5" aria-hidden="true" /> Share on WhatsApp
         </button>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
-          <button onClick={shareEmail}
-            className="flex items-center justify-center gap-2 rounded-2xl font-bold text-sm border transition hover:opacity-80"
+          <button onClick={shareEmail} disabled={sharing}
+            className="flex items-center justify-center gap-2 rounded-2xl font-bold text-sm border transition hover:opacity-80 disabled:opacity-60 disabled:cursor-wait"
             style={{ minHeight: 54, borderColor: c.border, color: c.text, background: c.surface }}
             {...focusRing(`${c.gold}55`)}>
-            <Mail className="w-4 h-4" aria-hidden="true" /> Share by Gmail
+            {sharing
+              ? <><Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> Preparing…</>
+              : <><Mail className="w-4 h-4" aria-hidden="true" /> Email with card</>}
           </button>
           <button onClick={downloadPng} disabled={downloadingPng}
             className="flex items-center justify-center gap-2 rounded-2xl font-bold text-sm border transition hover:opacity-80 disabled:opacity-60 disabled:cursor-wait"
@@ -3826,6 +3936,8 @@ function OrderModal({ order, onClose, c, dark, cardSizeId, onStatusChange, onDel
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [downloadingPng, setDownloadingPng] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [shareHint, setShareHint] = useState<'shared' | 'downloaded' | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const reduce = usePrefersReducedMotion();
   const copy = () => { navigator.clipboard?.writeText(corel); setCopied(true); setTimeout(() => setCopied(false), 1500); };
@@ -3836,13 +3948,21 @@ function OrderModal({ order, onClose, c, dark, cardSizeId, onStatusChange, onDel
   // mailto: bodies are silently truncated past ~2000 chars by many mail clients,
   // so the matter only travels inline when it fits; otherwise the draft carries
   // the order details and the matter goes across by clipboard.
-  const shareEmail = () => {
-    const heading = `Order Number: ${order.orderId}\nCouple: ${order.couple}\nSubmitted: ${order.at}`;
-    openMailDraft(
-      `Order ${order.orderId} — ${order.couple}`,
-      `${heading}\n\n${corel}`,
-      `${heading}\n\nThe full matter was too long for one draft. Copy it with "Copy matter for CorelDRAW" and paste it here.`,
-    );
+  const shareEmail = async () => {
+    if (!previewRef.current || sharing) return;
+    setSharing(true);
+    try {
+      const heading = `Order Number: ${order.orderId}\nCouple: ${order.couple}\nSubmitted: ${order.at}`;
+      setShareHint(await shareMatterAndCard({
+        root: previewRef.current,
+        base: fileBase,
+        subject: `Order ${order.orderId} — ${order.couple}`,
+        body: `${heading}\n\n${corel}`,
+        fallback: `${heading}\n\nThe full matter was too long for one draft. Copy it with "Copy matter for CorelDRAW" and paste it here.`,
+      }));
+    } finally {
+      setSharing(false);
+    }
   };
   const fileBase = `${order.orderId}-${order.couple.replace(/\s+/g, '-')}`;
   const downloadPng = async () => {
@@ -4046,14 +4166,18 @@ function OrderModal({ order, onClose, c, dark, cardSizeId, onStatusChange, onDel
                 {...focusRing('#1DA85166')}>
                 <MessageCircle className="w-4 h-4" aria-hidden="true" /> Send matter on WhatsApp
               </button>
-              <button onClick={shareEmail}
-                className="w-full mt-2.5 flex items-center justify-center gap-2 rounded-2xl text-sm font-bold border transition hover:opacity-85"
+              <button onClick={shareEmail} disabled={sharing}
+                className="w-full mt-2.5 flex items-center justify-center gap-2 rounded-2xl text-sm font-bold border transition hover:opacity-85 disabled:opacity-60 disabled:cursor-wait"
                 style={{ minHeight: 50, borderColor: c.border, color: c.text, background: dark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.7)' }}
                 {...focusRing(`${c.gold}55`)}>
-                <Mail className="w-4 h-4" aria-hidden="true" /> Send matter by Gmail
+                {sharing
+                  ? <><Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> Preparing card…</>
+                  : <><Mail className="w-4 h-4" aria-hidden="true" /> Send matter + card by email</>}
               </button>
               <div className="text-[11px] mt-2.5 leading-snug font-medium" style={{ color: c.subtext }}>
-                WhatsApp and Gmail both open pre-filled with the full matter as text. Neither can attach the card itself — download the PNG or PDF first and attach it.
+                {shareHint === 'downloaded'
+                  ? 'Card pages (PNG) and the PDF were saved to your downloads, and the Gmail draft has the full matter — drag the files into the draft to attach them. A web page cannot attach to Gmail on its own.'
+                  : 'WhatsApp opens with the full matter as text. Email opens a Gmail draft with the matter and saves the card as PNG pages and a PDF to attach; on a phone the share sheet attaches them for you.'}
               </div>
             </div>
 
