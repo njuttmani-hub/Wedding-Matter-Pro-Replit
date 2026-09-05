@@ -12,6 +12,10 @@ export interface Palette {
   goldDeep: string;
   accent: string;
   ink: string;
+  /** Text/icon colour that sits ON a primary or gold fill. The Midnight theme
+   *  fills buttons with champagne, so that text must be near-black; the light
+   *  theme fills with deep bronze, so it must be white. */
+  onAccent: string;
 }
 
 export interface PersonInfo {
@@ -57,6 +61,7 @@ export interface FormState {
   relationWord: string;
   closingTag: string;
   kidsLine: string;
+  kidsCustom: string;             // the couple's own kids line, used when kidsLine === 'custom'
   programmes: Programme[];
   withCompliments: string;
   blessingsOnly: boolean;
