@@ -2604,7 +2604,14 @@ function StepDesign({ form, update, c, dark }: { form: FormState; update: (path:
   const [cat, setCat] = useState('All');
   const [target, setTarget] = useState('heading');
   const cats = ['All', ...Array.from(new Set(FONTS.map(f => f.cat)))];
-  const filtered = FONTS.filter(f => (cat === 'All' || f.cat === cat) && f.langs.includes('English') && f.name.toLowerCase().includes(search.toLowerCase()));
+  // Deliberately no language restriction. This used to also require
+  // `f.langs.includes('English')`, which hid every Devanagari and Gujarati face
+  // — nine fonts that were still downloaded on every page view yet could never
+  // be picked. Filtering on `form.design.language` instead would not help: no
+  // UI writes it (it is always 'English'), and even with a selector, a couple's
+  // Latin-script names often want a Latin font on an otherwise Hindi card. All
+  // these faces include Latin glyphs, so their name previews render properly.
+  const filtered = FONTS.filter(f => (cat === 'All' || f.cat === cat) && f.name.toLowerCase().includes(search.toLowerCase()));
 
   const targetKey: 'headingFont' | 'bodyFont' | 'scriptFont' = target === 'heading' ? 'headingFont' : target === 'body' ? 'bodyFont' : 'scriptFont';
   const currentFamily = form.design[targetKey];
