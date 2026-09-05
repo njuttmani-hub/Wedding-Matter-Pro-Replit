@@ -1,5 +1,65 @@
 @import "tailwindcss";
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   Wedding Matter Pro — global stylesheet
+
+   Midnight & Champagne. The app chrome is a near-black studio so that the
+   white invitation card is the brightest object on screen by a wide margin
+   (~17:1) — the card is the product, everything else is the room it sits in.
+
+   Theme is published by <Nav> as html[data-wmp-theme="light" | "dark"], and
+   "dark" (Midnight) is the default. The bare :root block below is the
+   champagne daylight variant, so the sheet still degrades sensibly if the
+   attribute is ever absent.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Daylight (champagne) — the secondary theme. Kept in sync with palette.light. */
+:root {
+  --wmp-gold: #7A5C28;
+  --wmp-gold-light: #C6A15B;
+  --wmp-gold-deep: #4E3813;
+  --wmp-primary: #6B4A22;
+  --wmp-ink: #221F1A;
+  --wmp-paper: #F2EEE7;
+
+  --wmp-focus: #6B4A22;
+  --wmp-focus-halo: rgba(107, 74, 34, 0.20);
+  --wmp-scroll-thumb: rgba(122, 92, 40, 0.40);
+  --wmp-scroll-thumb-hover: rgba(107, 74, 34, 0.58);
+  --wmp-select-bg: rgba(122, 92, 40, 0.22);
+  --wmp-select-fg: #221F1A;
+  --wmp-option-bg: #FAF6F0;
+  --wmp-option-fg: #221F1A;
+
+  --wmp-ease: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Midnight — the product's identity, and the default. */
+html[data-wmp-theme="dark"] {
+  --wmp-gold: #D9C08C;
+  --wmp-gold-light: #F0E2C4;
+  --wmp-gold-deep: #C6A15B;
+  --wmp-primary: #B08A4A;
+  --wmp-ink: #F2EEE6;
+  --wmp-paper: #14131A;
+
+  --wmp-focus: #D9C08C;
+  --wmp-focus-halo: rgba(217, 192, 140, 0.26);
+  --wmp-scroll-thumb: rgba(217, 192, 140, 0.30);
+  --wmp-scroll-thumb-hover: rgba(217, 192, 140, 0.52);
+  --wmp-select-bg: rgba(217, 192, 140, 0.26);
+  --wmp-select-fg: #F2EEE6;
+  --wmp-option-bg: #1E1D26;
+  --wmp-option-fg: #F2EEE6;
+
+  color-scheme: dark;
+}
+
+html[data-wmp-theme="light"] { color-scheme: light; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   BASE
+   ───────────────────────────────────────────────────────────────────────── */
 @layer base {
   * {
     box-sizing: border-box;
@@ -8,61 +68,386 @@
   }
 
   html {
-    font-size: 18px;
+    /* Back to 16px now that the UI runs on Inter rather than a serif: Inter's
+       x-height is far larger, so 16px here reads bigger than 17px did before
+       while giving the layout back the room it was crowding out. */
+    font-size: 16px;
+    -webkit-text-size-adjust: 100%;
   }
 
   body {
+    /* Inter carries the interface; Playfair Display carries the headings.
+       The wedding serifs are reserved for the card itself, so the app chrome
+       never competes with the artwork it is framing. */
+    font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    font-weight: 600;
-    letter-spacing: 0.01em;
+    /* 450-ish: with real weights available, Tailwind's font-medium /
+       font-semibold / font-bold produce three distinguishable steps instead
+       of the old uniformly heavy 600/700/800 block. */
+    font-weight: 400;
+    line-height: 1.55;
+    letter-spacing: 0;
+    font-variant-numeric: lining-nums proportional-nums;
+    min-height: 100dvh;
+    overflow-x: hidden;
   }
 
   h1, h2, h3, h4, h5, h6 {
-    font-weight: 700;
+    font-family: 'Playfair Display', Georgia, serif;
+    font-weight: 600;
+    line-height: 1.14;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
   }
 
-  button, label, input, select, textarea, p, span, div, a {
-    font-weight: inherit;
+  p { text-wrap: pretty; }
+
+  /* Names and dates must never be ambiguous — force tabular figures in inputs */
+  input, textarea, select { font-variant-numeric: lining-nums tabular-nums; }
+
+  button, label, input, select, textarea, a { font-family: inherit; }
+
+  /* Native dropdown list. Chrome paints the popup from the <select>'s own
+     background-color, which here is a near-transparent tint — so it composites
+     to white while the options inherit the control's pale champagne text,
+     leaving the list unreadable in Midnight. `color-scheme: dark` alone does
+     not fix it, because the control's own colours still win. Options get an
+     explicit opaque pair instead. */
+  select option, select optgroup {
+    background-color: var(--wmp-option-bg);
+    color: var(--wmp-option-fg);
+  }
+  button { cursor: pointer; background: none; border: none; color: inherit; }
+  button:disabled { cursor: not-allowed; }
+
+  img, svg, video { display: block; max-width: 100%; }
+
+  ::selection { background: var(--wmp-select-bg); color: var(--wmp-select-fg); }
+
+  input::placeholder, textarea::placeholder {
+    opacity: 1;
+    color: currentColor;
+    filter: opacity(0.42);
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   FOCUS — previously completely unstyled. Keyboard users had no visible focus.
+   ───────────────────────────────────────────────────────────────────────── */
+:focus { outline: none; }
+
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--wmp-focus);
+  outline-offset: 3px;
+  border-radius: inherit;
+  box-shadow: 0 0 0 6px var(--wmp-focus-halo);
+  transition: box-shadow 0.18s ease;
+}
+
+:where(input[type="checkbox"], input[type="radio"]):focus-visible {
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--wmp-focus-halo);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   SCROLLBARS
+   ───────────────────────────────────────────────────────────────────────── */
+* { scrollbar-width: thin; scrollbar-color: var(--wmp-scroll-thumb) transparent; }
+
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background-color: var(--wmp-scroll-thumb);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: var(--wmp-scroll-thumb-hover); }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   RANGE INPUTS (typography sliders, Step 5)
+   Driven per-instance by SliderField through --wm-track / --wm-thumb, which is
+   how the fill tracks the palette. Selectors are element+class on purpose:
+   a bare `.wm-range` would LOSE to `input[type="range"]` on specificity.
+   ───────────────────────────────────────────────────────────────────────── */
+input[type="range"].wm-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"].wm-range::-webkit-slider-runnable-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--wm-track, rgba(0, 0, 0, 0.12));
+}
+input[type="range"].wm-range::-moz-range-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--wm-track, rgba(0, 0, 0, 0.12));
+}
+input[type="range"].wm-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  margin-top: -7px;
+  border-radius: 50%;
+  background: var(--wm-thumb, #D9C08C);
+  border: 3px solid var(--wmp-paper);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  transition: box-shadow 180ms ease, transform 180ms var(--wmp-ease);
+}
+input[type="range"].wm-range::-webkit-slider-thumb:hover { transform: scale(1.1); }
+input[type="range"].wm-range::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--wm-thumb, #D9C08C);
+  border: 3px solid var(--wmp-paper);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+input[type="range"].wm-range:focus-visible { outline: none; box-shadow: none; }
+input[type="range"].wm-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 5px var(--wm-thumb-ring, rgba(143, 90, 18, 0.35));
+}
+input[type="range"].wm-range:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 5px var(--wm-thumb-ring, rgba(143, 90, 18, 0.35));
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   MICRO-LABEL FLOOR
+   The 9–11px uppercase labels at 0.3em tracking were the real legibility
+   failure for this audience. Intentionally UNLAYERED so they win over
+   Tailwind's arbitrary-value utilities regardless of source order.
+   ───────────────────────────────────────────────────────────────────────── */
+[class~="text-[9px]"]  { font-size: 0.70rem; }   /* ≈11.2px */
+[class~="text-[10px]"] { font-size: 0.75rem; }   /* ≈12.0px */
+[class~="text-[11px]"] { font-size: 0.80rem; }   /* ≈12.8px */
+
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   KEYFRAMES — shared vocabulary for every component
+   ───────────────────────────────────────────────────────────────────────── */
+@keyframes wmp-shimmer {
+  0%   { background-position: -150% 0; }
+  100% { background-position:  250% 0; }
+}
+
+@keyframes wmp-sweep {
+  0%, 62% { background-position: 210% 0; }
+  100%    { background-position: -60% 0; }
+}
+
+@keyframes wmp-float {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50%      { transform: translate3d(0, -7px, 0); }
+}
+
+@keyframes wmp-bloom-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1);        opacity: 0.82; }
+  50%      { transform: translate3d(3%, -2.5%, 0) scale(1.09); opacity: 1; }
+}
+
+@keyframes wmp-spin { to { transform: rotate(360deg); } }
+
+@keyframes wmp-fade-up {
+  from { opacity: 0; transform: translate3d(0, 10px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes wmp-pulse-soft {
+  0%, 100% { opacity: 1;    transform: scale(1); }
+  50%      { opacity: 0.45; transform: scale(0.9); }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   UTILITIES — unlayered on purpose, so .wmp-hero-card beats shadow-2xl.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Paper grain. Tiled inline-SVG turbulence — no external asset, and no
+   `mix-blend-mode`: blending a full-viewport layer forces the entire stacking
+   context through the compositor on every paint, which was a large part of the
+   scroll stutter. Plain low opacity gets the same texture for free. */
+.wmp-grain {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 160px 160px;
+  pointer-events: none;
+}
+
+/* PERFORMANCE NOTE — read before adding effects to the background.
+   These used to carry `filter: blur(46px)` on two viewport-sized elements plus
+   two infinitely-rotating SVGs, all on a `position: fixed` layer. A large blur
+   filter is re-rasterised rather than composited, so the whole background was
+   repainting continuously and every scroll fought it for the main thread.
+   The blooms are now plain radial-gradients, which are already soft and cost
+   nothing, and nothing in the background animates. Keep it that way. */
+.wmp-bloom { }
+.wmp-bloom--alt { }
+
+.wmp-spin-slow { }
+.wmp-spin-slow--rev { }
+
+.wmp-float { }
+
+/* Gold leaf sweep. Static sheen — it used to run a 7.5s infinite animation,
+   which kept a compositor layer alive and repainting for pure decoration. */
+.wmp-gold-sweep { position: relative; overflow: hidden; isolation: isolate; }
+.wmp-gold-sweep::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(105deg,
+    transparent 38%,
+    rgba(255, 244, 214, 0.20) 48%,
+    rgba(255, 255, 255, 0.30) 52%,
+    transparent 62%);
+}
+
+/* Skeleton / loading shimmer. */
+.wmp-shimmer {
+  background-image: linear-gradient(100deg,
+    transparent 22%,
+    var(--wmp-select-bg) 46%,
+    transparent 74%);
+  background-size: 220% 100%;
+  animation: wmp-shimmer 2.4s linear infinite;
+}
+
+.wmp-fade-up { animation: wmp-fade-up 0.55s var(--wmp-ease) both; }
+.wmp-pulse-soft { animation: wmp-pulse-soft 2.4s ease-in-out infinite; }
+
+/* THE HERO. A five-stop shadow ladder (contact → ambient → cast → far cast)
+   plus a hairline gold ring, which is what actually makes a white rectangle
+   read as a lifted sheet of paper. */
+.wmp-hero-card {
+  box-shadow:
+    0 1px 2px rgba(43, 18, 22, 0.07),
+    0 4px 10px -2px rgba(43, 18, 22, 0.10),
+    0 18px 34px -12px rgba(43, 18, 22, 0.22),
+    0 44px 82px -30px rgba(43, 18, 22, 0.32),
+    0 0 0 1px rgba(143, 90, 18, 0.16);
+}
+html[data-wmp-theme="dark"] .wmp-hero-card {
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.6),
+    0 24px 52px -14px rgba(0, 0, 0, 0.78),
+    0 70px 120px -40px rgba(0, 0, 0, 0.9),
+    0 0 0 1px rgba(217, 192, 140, 0.28),
+    0 0 90px -20px rgba(217, 192, 140, 0.22);
+}
+
+/* Panels are opaque by design. `backdrop-filter` was removed everywhere it sat
+   on scrolling content: each blurred panel forces a readback of everything
+   behind it on every frame, and there were six of them stacked down the page. */
+.wmp-panel { }
+
+/* Engraved gold hairline, for section tops and card headers. */
+.wmp-rule {
+  height: 1px;
+  border: 0;
+  background: linear-gradient(90deg, transparent, var(--wmp-gold) 50%, transparent);
+  opacity: 0.42;
+}
+
+/* Elevation ladder for non-hero surfaces. */
+.wmp-elev-1 { box-shadow: 0 1px 2px rgba(43, 18, 22, 0.05), 0 6px 16px -8px rgba(43, 18, 22, 0.16); }
+.wmp-elev-2 { box-shadow: 0 2px 4px rgba(43, 18, 22, 0.06), 0 14px 30px -12px rgba(43, 18, 22, 0.22); }
+.wmp-elev-3 { box-shadow: 0 4px 8px rgba(43, 18, 22, 0.07), 0 28px 56px -20px rgba(43, 18, 22, 0.30); }
+html[data-wmp-theme="dark"] .wmp-elev-1 { box-shadow: 0 2px 6px rgba(0, 0, 0, 0.42); }
+html[data-wmp-theme="dark"] .wmp-elev-2 { box-shadow: 0 8px 22px -8px rgba(0, 0, 0, 0.62); }
+html[data-wmp-theme="dark"] .wmp-elev-3 { box-shadow: 0 20px 46px -16px rgba(0, 0, 0, 0.75); }
+
+/* Tap target guarantee — phone-first, older users. */
+.wmp-tap { min-width: 44px; min-height: 44px; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   REDUCED MOTION
+   ───────────────────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    transition-delay: 0s !important;
+  }
+  .wmp-bloom, .wmp-spin-slow, .wmp-float, .wmp-shimmer, .wmp-pulse-soft { animation: none !important; }
+  .wmp-gold-sweep::after { display: none !important; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   PRINT — the Print button must produce the CARD, not the app chrome.
+   The :has() guard keeps these rules inert until something is actually tagged
+   .wmp-print-area, so a missing class can never yield a blank page.
+   ───────────────────────────────────────────────────────────────────────── */
+@media print {
+  @page { margin: 12mm; }
+
+  html, body {
+    background: #FFFFFF !important;
+    color: #111111 !important;
+    font-size: 16px;
   }
 
-  .font-bold {
-    font-weight: 800 !important;
+  *, *::before, *::after {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    animation: none !important;
+    transition: none !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
   }
 
-  .font-semibold {
-    font-weight: 700 !important;
+  .wmp-atmosphere,
+  .wmp-nav,
+  .wmp-no-print,
+  nav { display: none !important; }
+
+  html:has(.wmp-print-area) body * { visibility: hidden !important; }
+  html:has(.wmp-print-area) .wmp-print-area,
+  html:has(.wmp-print-area) .wmp-print-area * { visibility: visible !important; }
+
+  /* Step 6 and the fullscreen modal both mark a print area, and both are in the
+     DOM while the modal is open. When it is, only the modal's copy prints. */
+  html:has(.wmp-print-modal) .wmp-print-area:not(.wmp-print-modal),
+  html:has(.wmp-print-modal) .wmp-print-area:not(.wmp-print-modal) * {
+    visibility: hidden !important;
   }
 
-  .font-medium {
-    font-weight: 600 !important;
+  html:has(.wmp-print-area) .wmp-print-area {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
 
-  input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: #B8893D;
-    cursor: pointer;
-    box-shadow: 0 2px 6px rgba(184, 137, 61, 0.5);
+  /* Each card page prints whole; page 2 starts on a fresh sheet. */
+  .wmp-card-page {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    border-radius: 0 !important;
   }
-
-  input[type="range"]::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: #B8893D;
-    cursor: pointer;
-    border: none;
-    box-shadow: 0 2px 6px rgba(184, 137, 61, 0.5);
-  }
-
-  .line-clamp-2 {
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
+  .wmp-card-page + .wmp-card-page {
+    break-before: page !important;
+    page-break-before: always !important;
   }
 }
