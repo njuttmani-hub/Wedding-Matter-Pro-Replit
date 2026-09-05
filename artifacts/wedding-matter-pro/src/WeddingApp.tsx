@@ -3210,6 +3210,25 @@ function DecorativeDivider({ compact, mini }: { compact?: boolean; mini?: boolea
   );
 }
 
+/** Opens a Gmail compose tab with the draft pre-filled.
+ *
+ *  Deliberately NOT `mailto:`. That hands the draft to whatever app Windows has
+ *  registered for the scheme — on the studio machine an Outlook association
+ *  nobody uses — and when that handler is missing or declined the click does
+ *  nothing at all, with no way for us to detect it. A normal https link always
+ *  lands somewhere the user can see.
+ *
+ *  It also lifts the length ceiling: a `mailto:` body is silently truncated
+ *  past roughly 2000 characters, so the full matter rarely fitted. A Gmail URL
+ *  carries it comfortably, and `fallback` now only applies to genuinely huge
+ *  matters. Called from a click handler, so the popup blocker allows it. */
+function openMailDraft(subject: string, body: string, fallback: string) {
+  const build = (b: string) =>
+    `https://mail.google.com/mail/?view=cm&fs=1&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(b)}`;
+  const url = build(body);
+  window.open(url.length > 7500 ? build(fallback) : url, '_blank', 'noopener');
+}
+
 /* ─── Success ────────────────────────────────────────────────────────────── */
 function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOrder; c: Palette; form: FormState; dark: boolean; onReset: () => void }) {
   const corel = generateCorelText(form);
@@ -3238,18 +3257,14 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
       setDownloadingPng(false);
     }
   };
-  // mailto: bodies are silently truncated past ~2000 chars by many mail clients,
-  // so the full matter only travels inline when it fits; otherwise the draft
-  // carries the order details and points back at "Copy Export".
   const shareEmail = () => {
     const couple = [form.bride.name, form.groom.name].filter(Boolean).join(' & ');
-    const subject = `Wedding Matter ${submitted.orderId}${couple ? ` — ${couple}` : ''}`;
     const heading = `Order Number: ${submitted.orderId}\nCouple: ${couple || '—'}\nSubmitted: ${submitted.at}`;
-    const full = `${heading}\n\n${corel}\n\n— Wedding Matter Pro`;
-    const short = `${heading}\n\nThe full matter was too long to fit in an email draft. Use "Copy Export" on the confirmation page and paste it below this line.\n\n— Wedding Matter Pro`;
-    const build = (body: string) => `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    const href = build(full);
-    window.location.href = href.length > 1900 ? build(short) : href;
+    openMailDraft(
+      `Wedding Matter ${submitted.orderId}${couple ? ` — ${couple}` : ''}`,
+      `${heading}\n\n${corel}\n\n— Wedding Matter Pro`,
+      `${heading}\n\nThe full matter was too long for one draft. Use "Copy Export" on the confirmation page and paste it below this line.\n\n— Wedding Matter Pro`,
+    );
   };
   const shareWA = () => {
     const text = encodeURIComponent(`🌹 *New Wedding Matter Order*\n\n*Order ID:* ${submitted.orderId}\n*Couple:* ${form.bride.name} ❤️ ${form.groom.name}\n*Submitted:* ${submitted.at}\n\n_Wedding Matter Pro_`);
@@ -3356,7 +3371,7 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
             className="flex items-center justify-center gap-2 rounded-2xl font-bold text-sm border transition hover:opacity-80"
             style={{ minHeight: 54, borderColor: c.border, color: c.text, background: c.surface }}
             {...focusRing(`${c.gold}55`)}>
-            <Mail className="w-4 h-4" aria-hidden="true" /> Share by Email
+            <Mail className="w-4 h-4" aria-hidden="true" /> Share by Gmail
           </button>
           <button onClick={downloadPng} disabled={downloadingPng}
             className="flex items-center justify-center gap-2 rounded-2xl font-bold text-sm border transition hover:opacity-80 disabled:opacity-60 disabled:cursor-wait"
@@ -3374,7 +3389,7 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
           </button>
         </div>
         <p className="text-xs mt-3 text-center font-medium leading-snug max-w-md mx-auto" style={{ color: c.subtext }}>
-          WhatsApp and email open pre-filled with your order details as text — neither can attach the card, so download the image if you want to send the card itself.
+          WhatsApp and Gmail open pre-filled with your order details as text — neither can attach the card, so download the image if you want to send the card itself.
         </p>
       </motion.div>
 
@@ -3822,13 +3837,12 @@ function OrderModal({ order, onClose, c, dark, cardSizeId, onStatusChange, onDel
   // so the matter only travels inline when it fits; otherwise the draft carries
   // the order details and the matter goes across by clipboard.
   const shareEmail = () => {
-    const subject = `Order ${order.orderId} — ${order.couple}`;
     const heading = `Order Number: ${order.orderId}\nCouple: ${order.couple}\nSubmitted: ${order.at}`;
-    const full = `${heading}\n\n${corel}`;
-    const short = `${heading}\n\nThe full matter was too long for an email draft. Copy it with "Copy matter for CorelDRAW" and paste it here.`;
-    const build = (body: string) => `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    const href = build(full);
-    window.location.href = href.length > 1900 ? build(short) : href;
+    openMailDraft(
+      `Order ${order.orderId} — ${order.couple}`,
+      `${heading}\n\n${corel}`,
+      `${heading}\n\nThe full matter was too long for one draft. Copy it with "Copy matter for CorelDRAW" and paste it here.`,
+    );
   };
   const fileBase = `${order.orderId}-${order.couple.replace(/\s+/g, '-')}`;
   const downloadPng = async () => {
@@ -4036,10 +4050,10 @@ function OrderModal({ order, onClose, c, dark, cardSizeId, onStatusChange, onDel
                 className="w-full mt-2.5 flex items-center justify-center gap-2 rounded-2xl text-sm font-bold border transition hover:opacity-85"
                 style={{ minHeight: 50, borderColor: c.border, color: c.text, background: dark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.7)' }}
                 {...focusRing(`${c.gold}55`)}>
-                <Mail className="w-4 h-4" aria-hidden="true" /> Send matter by email
+                <Mail className="w-4 h-4" aria-hidden="true" /> Send matter by Gmail
               </button>
               <div className="text-[11px] mt-2.5 leading-snug font-medium" style={{ color: c.subtext }}>
-                WhatsApp opens pre-filled with the full matter as text; email does the same, but drops back to just the order details when the matter is too long for a mail draft. Neither can attach the card itself — download the PNG or PDF first and attach it.
+                WhatsApp and Gmail both open pre-filled with the full matter as text. Neither can attach the card itself — download the PNG or PDF first and attach it.
               </div>
             </div>
 
