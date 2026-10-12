@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef, useLayoutEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Session } from '@supabase/supabase-js';
 import {
@@ -10,7 +10,7 @@ import {
   MessageCircle, Zap, Info, ArrowLeftRight, CloudOff, Save, Maximize2,
   LogOut, Lock, Loader2, Download, EyeOff, ShieldCheck, AlertTriangle, ChevronDown, Mail
 } from 'lucide-react';
-import type { Palette, FormState, PersonInfo, Programme, SubmittedOrder } from './types';
+import type { Palette, FormState, PersonInfo, Programme, SubmittedOrder, CardSize } from './types';
 import {
   INVITATION_TEMPLATES, DEITIES, RELATION_WORDS, CLOSING_TAGS, KIDS_LINES,
   PROGRAMME_PRESETS, FONTS, CARD_SIZES, SALUTATIONS, DEFAULT_CARD_SIZE
@@ -332,6 +332,32 @@ function kidsLineText(form: FormState): string {
   return KIDS_LINES.find(t => t.id === form.kidsLine)?.label || '';
 }
 
+/* ─── Card size ──────────────────────────────────────────────────────────── */
+const CM_PER_IN = 2.54;
+// Smaller than 3" and the matter can't be set legibly at any scale; larger
+// than 20" is a poster, not a card, and its export canvas gets unwieldy.
+const CARD_MIN_IN = 3, CARD_MAX_IN = 20;
+// The card is laid out at real physical size, so 1in is always 96 CSS px and
+// a 16px body font means the same printed size on every card.
+const PX_PER_IN = 96;
+
+function isValidCardSize(s: CardSize | undefined): s is CardSize {
+  const ok = (n: unknown) => typeof n === 'number' && Number.isFinite(n) && n >= CARD_MIN_IN && n <= CARD_MAX_IN;
+  return !!s && ok(s.widthIn) && ok(s.heightIn);
+}
+
+/** e.g. "7 × 9 in (17.8 × 22.9 cm)" — the customer's own unit first. */
+function cardSizeText(s: CardSize): string {
+  const inch = `${+s.widthIn.toFixed(2)} × ${+s.heightIn.toFixed(2)} in`;
+  const cm = `${(s.widthIn * CM_PER_IN).toFixed(1)} × ${(s.heightIn * CM_PER_IN).toFixed(1)} cm`;
+  return s.unit === 'cm' ? `${cm} (${inch})` : `${inch} (${cm})`;
+}
+
+/** The preset's name ("Square 7×7\"") or "Custom" — paired with cardSizeText. */
+function cardSizeName(s: CardSize): string {
+  return CARD_SIZES.find(p => p.id === s.preset)?.label || 'Custom';
+}
+
 function generateCorelText(form: FormState): string {
   const template = INVITATION_TEMPLATES.find(t => t.id === form.selectedTemplate);
   const closing = CLOSING_TAGS.find(t => t.id === form.closingTag);
@@ -362,6 +388,7 @@ function generateCorelText(form: FormState): string {
   s += `─── CARD ORDER ───\n${form.aboveWeds === 'bride' ? 'Bride ABOVE Weds · Groom BELOW' : 'Groom ABOVE Weds · Bride BELOW'}\n\n`;
   s += `─── DEITIES ───\n${deityGlyphs}\n${deityNames}\nMantra: ${DEITIES.find(d => d.id === form.deities[0])?.mantra || '—'}\n\n`;
   s += `─── DESIGN ───\nLayout: ${form.design.layout.toUpperCase()} | Language: ${form.design.language}\nHeading: ${form.design.headingFont}\nBody: ${form.design.bodyFont}\nScript: ${form.design.scriptFont}\nSize ${form.design.fontSize}px\n\n`;
+  s += `─── CARD SIZE ───\n${cardSizeName(form.design.cardSize)}: ${cardSizeText(form.design.cardSize)}\n\n`;
   s += `─── INVITATION TEMPLATE #${template?.id} (${template?.category}) ───\n${fillTemplate(template?.text || '', form)}\n\n`;
   s += personBlock(aboveRole, above, aboveRelation);
   s += `─── RELATION ───\n${relation?.label || 'Weds'}\n\n`;
@@ -2656,6 +2683,9 @@ function StepDesign({ form, update, c, dark }: { form: FormState; update: (path:
         </div>
       </div>
 
+      {/* Card size — the preview and exports are fitted to this sheet */}
+      <CardSizePicker size={form.design.cardSize} onChange={s => update('design.cardSize', s)} c={c} />
+
       {/* Sliders */}
       <GroupHeading label="Size & spacing" c={c} />
       <div className="grid sm:grid-cols-3 gap-5 mb-8">
@@ -2728,6 +2758,113 @@ function StepDesign({ form, update, c, dark }: { form: FormState; update: (path:
         )}
       </div>
     </Section>
+  );
+}
+
+function CardSizePicker({ size, onChange, c }: { size: CardSize; onChange: (s: CardSize) => void; c: Palette }) {
+  const unit = size.unit;
+  const isCustom = size.preset === 'custom';
+  const show = (inches: number, u: CardSize['unit']) => String(+(u === 'cm' ? inches * CM_PER_IN : inches).toFixed(u === 'cm' ? 1 : 2));
+  const toIn = (v: string) => (unit === 'cm' ? Number(v) / CM_PER_IN : Number(v));
+  const lo = unit === 'cm' ? +(CARD_MIN_IN * CM_PER_IN).toFixed(1) : CARD_MIN_IN;
+  const hi = unit === 'cm' ? +(CARD_MAX_IN * CM_PER_IN).toFixed(1) : CARD_MAX_IN;
+
+  // The custom fields as typed, held apart from the stored size so a half-typed
+  // "1" or an out-of-range value never reaches the card — it keeps its last
+  // valid size until both fields make sense again.
+  const [draft, setDraft] = useState(() => ({ w: show(size.widthIn, unit), h: show(size.heightIn, unit) }));
+  // Re-sync when the size changes from outside (sample fill, clear, a preset
+  // pick). After our own valid edits the draft already matches and is kept, so
+  // "7." isn't rewritten to "7" mid-keystroke.
+  useEffect(() => {
+    setDraft(d => (Math.abs(toIn(d.w) - size.widthIn) < 0.005 && Math.abs(toIn(d.h) - size.heightIn) < 0.005)
+      ? d : { w: show(size.widthIn, unit), h: show(size.heightIn, unit) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size.widthIn, size.heightIn, unit]);
+
+  const errorFor = (v: string) => {
+    if (v.trim() === '' || !Number.isFinite(Number(v))) return 'Enter a number';
+    const n = toIn(v);
+    return n < CARD_MIN_IN || n > CARD_MAX_IN ? `Must be between ${lo} and ${hi} ${unit}` : '';
+  };
+  const edit = (next: { w: string; h: string }) => {
+    setDraft(next);
+    // A field still showing the stored size (rounded for display) keeps its
+    // exact stored value, so editing the height doesn't nudge a 6" width to
+    // 5.98" via its "15.2 cm" display.
+    const exact = (v: string, inches: number) => (v === show(inches, unit) ? inches : toIn(v));
+    if (!errorFor(next.w) && !errorFor(next.h)) {
+      onChange({ preset: 'custom', unit, widthIn: exact(next.w, size.widthIn), heightIn: exact(next.h, size.heightIn) });
+    }
+  };
+  const setUnit = (u: CardSize['unit']) => {
+    if (u === unit) return;
+    // Storage is always inches, so only the display unit changes; the fields are
+    // re-shown from the last valid size in the new unit.
+    setDraft({ w: show(size.widthIn, u), h: show(size.heightIn, u) });
+    onChange({ ...size, unit: u });
+  };
+
+  // A tiny outline of the sheet's proportions, so landscape vs portrait reads at a glance.
+  const shape = (w: number, h: number, on: boolean) => {
+    const m = Math.max(w, h);
+    return <span className="shrink-0 rounded-[3px] border-[1.5px]" aria-hidden="true"
+      style={{ width: 22 * w / m, height: 22 * h / m, borderColor: on ? c.gold : withAlpha(c.text, 0.35) }} />;
+  };
+
+  return (
+    <div className="mb-8">
+      <GroupHeading label="Card size" note={cardSizeText(size)} c={c} />
+      <div className="grid sm:grid-cols-2 gap-2">
+        {CARD_SIZES.map(p => {
+          const on = size.preset === p.id;
+          return (
+            <OptionRow key={p.id} active={on} c={c}
+              onClick={() => onChange({ preset: p.id, widthIn: p.widthIn, heightIn: p.heightIn, unit })}>
+              <span className="flex items-center justify-between gap-3">
+                <span className="min-w-0">
+                  <span className="block text-[14px] font-bold" style={{ color: c.text }}>{p.label}</span>
+                  <span className="block text-[11px] font-medium" style={{ color: c.subtext }}>{p.widthIn}" wide × {p.heightIn}" tall</span>
+                </span>
+                {shape(p.widthIn, p.heightIn, on)}
+              </span>
+            </OptionRow>
+          );
+        })}
+        <OptionRow active={isCustom} c={c} onClick={() => { if (!isCustom) onChange({ ...size, preset: 'custom' }); }}>
+          <span className="flex items-center justify-between gap-3">
+            <span className="min-w-0">
+              <span className="block text-[14px] font-bold" style={{ color: c.text }}>Custom size</span>
+              <span className="block text-[11px] font-medium" style={{ color: c.subtext }}>Enter your own width and height</span>
+            </span>
+            {isCustom && shape(size.widthIn, size.heightIn, true)}
+          </span>
+        </OptionRow>
+      </div>
+
+      {isCustom && (
+        <div className="mt-3 rounded-2xl border p-4" style={{ borderColor: c.border, background: `${c.gold}07` }}>
+          <div className="flex items-center gap-2 mb-3 flex-wrap">
+            <span className="text-[10px] font-bold uppercase tracking-[0.24em] mr-1" style={{ color: c.subtext }}>Measure in</span>
+            <FilterChip label="Inches" active={unit === 'in'} onClick={() => setUnit('in')} c={c} />
+            <FilterChip label="cm" active={unit === 'cm'} onClick={() => setUnit('cm')} c={c} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Width" hint={unit} c={c} htmlFor="wmp-card-w" error={errorFor(draft.w) || undefined}>
+              <Input id="wmp-card-w" c={c} type="number" inputMode="decimal" step={unit === 'cm' ? 0.1 : 0.25} min={lo} max={hi}
+                value={draft.w} invalid={!!errorFor(draft.w)} onChange={e => edit({ ...draft, w: e.target.value })} />
+            </Field>
+            <Field label="Height" hint={unit} c={c} htmlFor="wmp-card-h" error={errorFor(draft.h) || undefined}>
+              <Input id="wmp-card-h" c={c} type="number" inputMode="decimal" step={unit === 'cm' ? 0.1 : 0.25} min={lo} max={hi}
+                value={draft.h} invalid={!!errorFor(draft.h)} onChange={e => edit({ ...draft, h: e.target.value })} />
+            </Field>
+          </div>
+          <div className="text-[11px] font-medium mt-3 leading-snug" style={{ color: c.subtext }}>
+            The whole card is re-set to fit this size — text is scaled to fit the sheet, never cut off.
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2866,6 +3003,7 @@ function StepSubmit({ form, update, c, onSubmit, setStep, submitting }: { form: 
     { label: 'Programmes', step: 3, value: `${form.programmes.filter(p => p.date).length} with dates`, icon: Calendar, ok: form.programmes.some(p => p.date) && !form.programmes.some(p => isPastDate(p.date)) },
     { label: 'Closing Line', step: 4, value: closing?.label || '—', icon: FileText, ok: true },
     { label: 'Design', step: 5, value: `${form.design.language} · ${form.design.layout}`, icon: Type, ok: true },
+    { label: 'Card Size', step: 5, value: `${cardSizeName(form.design.cardSize)} · ${cardSizeText(form.design.cardSize)}`, icon: Maximize2, ok: isValidCardSize(form.design.cardSize) },
   ];
   const pending = sections.filter(s => !s.ok).length;
 
@@ -2976,7 +3114,7 @@ function ZoomControls({ zoom, setZoom, c, onDark = false, className = '' }: {
 }
 
 /* ─── Card Preview ───────────────────────────────────────────────────────── */
-function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: Palette; dark: boolean; compact?: boolean; sizeId?: string }) {
+function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; dark: boolean; compact?: boolean }) {
   const layout = form.design.layout;
   const template = INVITATION_TEMPLATES.find(t => t.id === form.selectedTemplate);
   const closing = CLOSING_TAGS.find(t => t.id === form.closingTag);
@@ -2990,15 +3128,10 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
   const aboveRelation = form.aboveWeds === 'bride' ? 'D/o' : 'S/o';
   const belowRelation = form.aboveWeds === 'bride' ? 'S/o' : 'D/o';
 
-  // Card size sets a *minimum* height matching the real print proportions — using
-  // aspectRatio directly would lock the box to that height and silently clip any
-  // matter that doesn't fit, hiding content from the designer. minHeight (via a
-  // container-query width unit, so it tracks the box's own rendered width) lets the
-  // box grow taller automatically whenever there's more matter than the nominal size holds.
-  const sizeConf = CARD_SIZES.find(s => s.id === sizeId);
-  const aspectStyle: React.CSSProperties = sizeConf
-    ? { minHeight: `calc(100cqw * ${sizeConf.heightIn} / ${sizeConf.widthIn})` }
-    : {};
+  // Every page is exactly the card's trim size; FittedSheet scales the matter to
+  // fit it. An out-of-range size can't be stored by the picker, but an order is
+  // arbitrary JSON, so fall back rather than lay out a 0" or 500" sheet.
+  const cardSize = isValidCardSize(form.design.cardSize) ? form.design.cardSize : DEFAULT_CARD_SIZE;
 
   // White card background for maximum legibility
   const cardBg = '#FFFFFF';
@@ -3165,7 +3298,8 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
 
   // ── Paper shell: the card reads as a real sheet resting on the stage.
   //    `wmp-hero-card` carries the theme-aware shadow ladder + gold ring;
-  //    `wmp-card-page` makes each page print whole on its own sheet. ───────
+  //    `wmp-card-page` makes each page print whole on its own sheet, and is
+  //    how the exports find the pages. FittedSheet sizes it to the card. ───
   const paper = (children: React.ReactNode, label: string, showLabel: boolean) => (
     <div>
       {showLabel && (
@@ -3174,23 +3308,21 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
           <div className="h-px flex-1" style={{ background: `linear-gradient(90deg, ${c.gold}55, transparent)` }} />
         </div>
       )}
-      <motion.div
-        whileHover={{ y: -3 }}
-        transition={{ type: 'tween', duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-        className="wmp-card-page wmp-hero-card rounded-2xl overflow-hidden relative"
-        style={{ background: cardBg, color: '#111111', ...aspectStyle }}
-      >
-        {/* faint gold edge rule on the paper's own boundary */}
-        <div className="absolute inset-0 rounded-2xl pointer-events-none z-10" style={{ boxShadow: 'inset 0 0 0 1px rgba(192,137,46,0.42)' }} />
-        {layout !== 'modern' && (
-          <>
-            <div className="absolute inset-2.5 rounded-xl pointer-events-none" style={{ border: '2px double #C0892E', opacity: 0.5 }} />
-            <div className="absolute inset-4 rounded-lg pointer-events-none" style={{ border: '1px solid #C0892E', opacity: 0.5 }} />
-          </>
-        )}
-        {layout === 'modern' && <div className="absolute inset-3 rounded-xl pointer-events-none" style={{ border: '1px solid #C0892E', opacity: 0.4 }} />}
+      <FittedSheet size={cardSize} background={cardBg} decor={
+        <>
+          {/* faint gold edge rule on the paper's own boundary */}
+          <div className="absolute inset-0 rounded-2xl pointer-events-none z-10" style={{ boxShadow: 'inset 0 0 0 1px rgba(192,137,46,0.42)' }} />
+          {layout !== 'modern' && (
+            <>
+              <div className="absolute inset-2.5 rounded-xl pointer-events-none" style={{ border: '2px double #C0892E', opacity: 0.5 }} />
+              <div className="absolute inset-4 rounded-lg pointer-events-none" style={{ border: '1px solid #C0892E', opacity: 0.5 }} />
+            </>
+          )}
+          {layout === 'modern' && <div className="absolute inset-3 rounded-xl pointer-events-none" style={{ border: '1px solid #C0892E', opacity: 0.4 }} />}
+        </>
+      }>
         {children}
-      </motion.div>
+      </FittedSheet>
     </div>
   );
 
@@ -3200,6 +3332,107 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
     <div className="@container space-y-5">
       {paper(pageContent, 'Page 1 · Invitation', hasTwoPages)}
       {pageProgrammes && paper(pageProgrammes, 'Page 2 · Programmes', true)}
+    </div>
+  );
+}
+
+/* ─── Fitted card sheet ──────────────────────────────────────────────────────
+   Each page is laid out at its real physical size (PX_PER_IN), so a card of
+   any proportions gets the same typography, and the matter is then scaled as a
+   block until it fills the sheet without spilling off it. The whole sheet is
+   finally shrunk (or grown) to the preview column with a CSS transform. Two
+   separate scales on purpose: the content scale is part of the card's design
+   and is exported; the view scale is screen-only and the exports undo it. */
+
+// A packed card shrinks its matter down to 35%; a sparse one grows it up to
+// 130% so a big card with little on it isn't lost in whitespace.
+const FIT_MIN = 0.35, FIT_MAX = 1.3;
+
+/** Picks the content scale for one `.wmp-card-page` and applies it. Plain DOM
+ *  rather than React state, so html2canvas's `onclone` can re-run it on its
+ *  cloned sheet. Scaling by f while laying the matter out at width W/f makes
+ *  it span the sheet's width after scaling; its height then decides the fit.
+ *  h·f only grows with f (a narrower column wraps into more lines), so a
+ *  binary search finds the largest f that fits. */
+function fitSheetContent(sheet: HTMLElement) {
+  const content = sheet.querySelector<HTMLElement>('.wmp-sheet-content');
+  const W = sheet.clientWidth, H = sheet.clientHeight;
+  if (!content || !W || !H) return;
+  const fits = (f: number) => {
+    content.style.width = `${W / f}px`;
+    return content.offsetHeight * f <= H - 1;   // offsetHeight ignores transforms — the unscaled height
+  };
+  let f = FIT_MAX;
+  if (!fits(FIT_MAX)) {
+    // Below FIT_MIN the matter is clipped instead; at that point it is unreadable anyway.
+    let lo = FIT_MIN, hi = FIT_MAX;
+    for (let i = 0; i < 12; i++) { const mid = (lo + hi) / 2; if (fits(mid)) lo = mid; else hi = mid; }
+    f = lo;
+  }
+  content.style.width = `${W / f}px`;
+  content.style.transform = `scale(${f})`;
+}
+
+function FittedSheet({ size, background, decor, children }: { size: CardSize; background: string; decor: React.ReactNode; children: React.ReactNode }) {
+  const W = Math.round(size.widthIn * PX_PER_IN), H = Math.round(size.heightIn * PX_PER_IN);
+  const frameRef = useRef<HTMLDivElement>(null);   // reserves the scaled sheet's footprint in the page flow
+  const scalerRef = useRef<HTMLDivElement>(null);  // the screen-only view scale
+  const sheetRef = useRef<HTMLDivElement>(null);
+
+  // Styles are written to the DOM directly, never via React state: fitting has
+  // to measure, and measuring through state would mean a render per guess and
+  // a visible flash of the unfitted card.
+  const layout = useCallback(() => {
+    const frame = frameRef.current, scaler = scalerRef.current, sheet = sheetRef.current;
+    if (!frame || !scaler || !sheet) return;
+    fitSheetContent(sheet);
+    const avail = frame.clientWidth;
+    if (!avail) return;
+    // Fill the column's width, but stop a tall, narrow card running taller
+    // than 1.5× that width — it would push everything else off screen.
+    const s = Math.min(avail / W, (avail * 1.5) / H);
+    scaler.style.transform = `translateX(${(avail - W * s) / 2}px) scale(${s})`;
+    frame.style.height = `${H * s}px`;
+  }, [W, H]);
+
+  // Every render, since the matter may have changed; a layout effect, so the
+  // fitted card is the first thing painted.
+  useLayoutEffect(layout);
+
+  // Things that change the fit without a render: the column resizing, and web
+  // fonts arriving (they reflow the matter, which shows up as a content resize).
+  // Deferred a frame so re-fitting inside the observer can't trip its loop limit.
+  useEffect(() => {
+    let raf = 0;
+    const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(layout); };
+    const ro = new ResizeObserver(schedule);
+    if (frameRef.current) ro.observe(frameRef.current);
+    const content = sheetRef.current?.querySelector('.wmp-sheet-content');
+    if (content) ro.observe(content);
+    document.fonts?.ready.then(schedule);
+    return () => { ro.disconnect(); cancelAnimationFrame(raf); };
+  }, [layout]);
+
+  return (
+    <div ref={frameRef}>
+      <div ref={scalerRef} className="wmp-sheet-scaler" style={{ width: W, height: H, transformOrigin: '0 0' }}>
+        <motion.div
+          ref={sheetRef}
+          whileHover={{ y: -3 }}
+          transition={{ type: 'tween', duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+          className="wmp-card-page wmp-hero-card rounded-2xl overflow-hidden relative"
+          data-width-in={size.widthIn}
+          data-height-in={size.heightIn}
+          style={{ width: W, height: H, background, color: '#111111' }}
+        >
+          {decor}
+          {/* Centred both ways; an item wider than the sheet (FIT < 1) overflows
+              evenly, then the centre-origin scale brings it back inside. */}
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="wmp-sheet-content shrink-0" style={{ transformOrigin: '50% 50%' }}>{children}</div>
+          </div>
+        </motion.div>
+      </div>
     </div>
   );
 }
@@ -3243,49 +3476,92 @@ function openMailDraft(subject: string, body: string, fallback: string) {
 /** Every card page under `root`, rendered once. html2canvas is the expensive
  *  part of an export, so the PNGs and the PDF are both built from these rather
  *  than rendering the card twice. */
-async function cardCanvases(root: HTMLElement): Promise<HTMLCanvasElement[]> {
+interface CardCanvas { canvas: HTMLCanvasElement; widthIn: number; heightIn: number }
+
+async function cardCanvases(root: HTMLElement): Promise<CardCanvas[]> {
   const { default: html2canvas } = await import('html2canvas');
   // Each rendered card page carries .wmp-card-page. Selecting on that rather
   // than root.children matters: the ref wraps CardPreview, whose own root is a
   // single spacing container, so children[] is one element holding both pages.
   const pages = Array.from(root.querySelectorAll<HTMLElement>('.wmp-card-page'));
   const targets = pages.length ? pages : [root];
-  const out: HTMLCanvasElement[] = [];
+  const out: CardCanvas[] = [];
   for (const el of targets) {
-    out.push(await html2canvas(el, { scale: 2, backgroundColor: '#ffffff', useCORS: true }));
+    // Sheets are laid out at PX_PER_IN, so ~3× is roughly 300dpi print quality.
+    // Capped near 16 megapixels, past which iOS Safari silently draws nothing.
+    const scale = Math.min(3, Math.sqrt(16_000_000 / Math.max(1, el.offsetWidth * el.offsetHeight)));
+    const canvas = await html2canvas(el, {
+      scale, backgroundColor: '#ffffff', useCORS: true,
+      // On screen the sheet sits inside a scale() that fits it to the preview
+      // column. Captured as-is, html2canvas would measure that shrunken box and
+      // render the sheet mis-sized inside it; so the clone drops the view scale
+      // (and any hover lift) and is captured at its true physical size. The
+      // fit is then re-run, because the clone's iframe has its own viewport
+      // and font loading and could wrap a line differently from the screen.
+      //
+      // Box shadows go too, as they do in the print stylesheet: they are screen
+      // chrome, and html2canvas paints the sheet's inset edge-ring shadow as a
+      // solid tint across the whole card.
+      onclone: (doc, clone) => {
+        const style = doc.createElement('style');
+        style.textContent = '.wmp-card-page, .wmp-card-page * { box-shadow: none !important; }';
+        doc.head.appendChild(style);
+        const scaler = clone.closest<HTMLElement>('.wmp-sheet-scaler');
+        if (scaler) scaler.style.transform = 'none';
+        if (clone.classList.contains('wmp-card-page')) {
+          clone.style.transform = 'none';
+          fitSheetContent(clone);
+        }
+      },
+    });
+    out.push({
+      canvas,
+      widthIn: Number(el.dataset.widthIn) || el.offsetWidth / PX_PER_IN,
+      heightIn: Number(el.dataset.heightIn) || el.offsetHeight / PX_PER_IN,
+    });
   }
   return out;
+}
+
+async function cardPngFiles(pages: CardCanvas[], base: string): Promise<File[]> {
+  const files: File[] = [];
+  for (let i = 0; i < pages.length; i++) {
+    const blob = await new Promise<Blob | null>(res => pages[i].canvas.toBlob(res, 'image/png'));
+    if (blob) {
+      const name = pages.length > 1 ? `${base}-page-${i + 1}.png` : `${base}.png`;
+      files.push(new File([blob], name, { type: 'image/png' }));
+    }
+  }
+  return files;
+}
+
+/** One PDF page per card page, at the card's real trim size in inches, so a
+ *  printer can print it at 100% and get the right card. */
+async function cardPdfFile(pages: CardCanvas[], base: string): Promise<File | null> {
+  if (!pages.length) return null;
+  const { jsPDF } = await import('jspdf');
+  let doc: InstanceType<typeof jsPDF> | null = null;
+  for (const { canvas, widthIn, heightIn } of pages) {
+    // jsPDF swaps the format's sides to match `orientation`, so it has to agree with them.
+    const orientation = widthIn > heightIn ? 'l' : 'p';
+    if (!doc) {
+      doc = new jsPDF({ orientation, unit: 'in', format: [widthIn, heightIn] });
+    } else {
+      doc.addPage([widthIn, heightIn], orientation);
+    }
+    doc.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, widthIn, heightIn);
+  }
+  return doc ? new File([doc.output('blob')], `${base}.pdf`, { type: 'application/pdf' }) : null;
 }
 
 /** The card as shareable files: one PNG per page, plus a single PDF holding
  *  every page. Both formats go along because they get used differently — the
  *  PNGs preview inline in a chat or mail body, the PDF is what a printer or
- *  designer wants. PDF pages are sized 1:1 in pixels to their canvas so
- *  nothing is stretched or clipped, matching the standalone PDF export. */
+ *  designer wants. */
 async function cardFiles(root: HTMLElement, base: string): Promise<File[]> {
-  const canvases = await cardCanvases(root);
-  if (!canvases.length) return [];
-  const files: File[] = [];
-  for (let i = 0; i < canvases.length; i++) {
-    const blob = await new Promise<Blob | null>(res => canvases[i].toBlob(res, 'image/png'));
-    if (blob) {
-      const name = canvases.length > 1 ? `${base}-page-${i + 1}.png` : `${base}.png`;
-      files.push(new File([blob], name, { type: 'image/png' }));
-    }
-  }
-  const { jsPDF } = await import('jspdf');
-  let doc: InstanceType<typeof jsPDF> | null = null;
-  for (const canvas of canvases) {
-    const orientation = canvas.width > canvas.height ? 'l' : 'p';
-    if (!doc) {
-      doc = new jsPDF({ orientation, unit: 'px', format: [canvas.width, canvas.height], hotfixes: ['px_scaling'] });
-    } else {
-      doc.addPage([canvas.width, canvas.height], orientation);
-    }
-    doc.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, canvas.width, canvas.height);
-  }
-  if (doc) files.push(new File([doc.output('blob')], `${base}.pdf`, { type: 'application/pdf' }));
-  return files;
+  const pages = await cardCanvases(root);
+  const pdf = await cardPdfFile(pages, base);
+  return [...await cardPngFiles(pages, base), ...(pdf ? [pdf] : [])];
 }
 
 /** Whether the OS share sheet will both carry these files AND be likely to
@@ -3358,12 +3634,10 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
     if (!previewRef.current || downloadingPng) return;
     setDownloadingPng(true);
     try {
-      const { default: html2canvas } = await import('html2canvas');
-      const canvas = await html2canvas(previewRef.current, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
-      const link = document.createElement('a');
-      link.download = `${fileBase}.png`;
-      link.href = canvas.toDataURL('image/png');
-      link.click();
+      // One PNG per page, each at the card's proportions. Capturing the whole
+      // preview instead would stack the pages with their screen labels, and at
+      // the preview's on-screen scale.
+      downloadFiles(await cardPngFiles(await cardCanvases(previewRef.current), fileBase));
     } finally {
       setDownloadingPng(false);
     }
@@ -3558,7 +3832,7 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
           <div className="text-sm mt-1.5 font-medium" style={{ color: c.subtext }}>Exactly the matter our designer received</div>
         </div>
         {/* NOTE: this div must contain ONLY <CardPreview /> — the PNG download
-            captures it exactly as it is rendered. */}
+            captures each .wmp-card-page inside it exactly as it is rendered. */}
         <div ref={previewRef}>
           <CardPreview form={form} c={c} dark={dark} compact />
         </div>
@@ -3614,8 +3888,6 @@ function AdminDashboard({ c, dark, orders, ordersLoading, onStatusChange, onDele
   const [filter, setFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<SubmittedOrder | null>(null);
-  const [cardSizeId, setCardSizeId] = useState('sq7x7');
-  const [sizeOpen, setSizeOpen] = useState(false);
   const reduce = usePrefersReducedMotion();
 
   const filtered = orders.filter(o =>
@@ -3644,7 +3916,6 @@ function AdminDashboard({ c, dark, orders, ordersLoading, onStatusChange, onDele
   const panelBg = c.surface;
   const rowBg = dark ? 'rgba(255,255,255,0.045)' : 'rgba(255,255,255,0.62)';
   const shimmer = `${c.gold}22`;
-  const activeSize = CARD_SIZES.find(s => s.id === cardSizeId);
   const pulse = reduce ? '' : 'animate-pulse';
 
   return (
@@ -3700,56 +3971,6 @@ function AdminDashboard({ c, dark, orders, ordersLoading, onStatusChange, onDele
         })}
       </div>
 
-      {/* Card size for the order preview */}
-      <div className="rounded-3xl border shadow-md overflow-hidden mb-5" style={{ borderColor: c.border, background: panelBg }}>
-        <button
-          type="button"
-          onClick={() => setSizeOpen(v => !v)}
-          aria-expanded={sizeOpen}
-          className="w-full flex items-center justify-between gap-3 px-4 sm:px-5 py-3.5 text-left transition hover:opacity-90"
-          style={{ minHeight: 54 }}
-          {...focusRing(`${c.gold}55`)}
-        >
-          <span className="flex items-center gap-2.5 min-w-0">
-            <Maximize2 className="w-4 h-4 shrink-0" style={{ color: c.gold }} aria-hidden="true" />
-            <span className="text-[10px] font-bold uppercase tracking-[0.22em] shrink-0" style={{ color: c.subtext }}>Preview size</span>
-            <span className="text-sm font-bold truncate" style={{ color: c.text }}>{activeSize?.label}</span>
-          </span>
-          <ChevronDown className={`w-4 h-4 shrink-0 transition-transform duration-300 ${sizeOpen ? 'rotate-180' : ''}`} style={{ color: c.gold }} aria-hidden="true" />
-        </button>
-        {sizeOpen && (
-          <div className="px-4 sm:px-5 pb-4 pt-4 border-t" style={{ borderColor: c.border }}>
-            <div className="flex flex-wrap gap-2">
-              {CARD_SIZES.map(sz => {
-                const on = cardSizeId === sz.id;
-                return (
-                  <button
-                    key={sz.id}
-                    type="button"
-                    onClick={() => setCardSizeId(sz.id)}
-                    aria-pressed={on}
-                    className="flex items-center gap-2 px-4 rounded-full border text-sm font-bold transition-all"
-                    style={{
-                      minHeight: 46,
-                      borderWidth: on ? 1.5 : 1,
-                      borderColor: on ? c.gold : c.border,
-                      background: on ? `${c.gold}1A` : rowBg,
-                      color: on ? c.gold : c.text,
-                    }}
-                    {...focusRing(`${c.gold}55`)}
-                  >
-                    {on && <Check className="w-3.5 h-3.5" strokeWidth={3} aria-hidden="true" />}
-                    {sz.label} <span className="opacity-55 text-xs font-semibold">({sz.widthIn}×{sz.heightIn}")</span>
-                  </button>
-                );
-              })}
-            </div>
-            <div className="text-xs mt-3 font-medium leading-snug" style={{ color: c.subtext }}>
-              The card preview inside each order is sized to match these print dimensions.
-            </div>
-          </div>
-        )}
-      </div>
 
       {/* Search + filters + list */}
       <div className="rounded-3xl border shadow-xl p-4 sm:p-6" style={{ borderColor: c.border, background: panelBg }}>
@@ -3900,7 +4121,7 @@ function AdminDashboard({ c, dark, orders, ordersLoading, onStatusChange, onDele
 
       <AnimatePresence>
         {selected && (
-          <OrderModal order={selected} onClose={() => setSelected(null)} c={c} dark={dark} cardSizeId={cardSizeId}
+          <OrderModal order={selected} onClose={() => setSelected(null)} c={c} dark={dark}
             onStatusChange={s => updateStatus(selected.orderId, s)}
             onDelete={() => { deleteOrder(selected.orderId); setSelected(null); }} />
         )}
@@ -3941,7 +4162,7 @@ function StatusBadge({ s, c }: { s: string; c: Palette }) {
   );
 }
 
-function OrderModal({ order, onClose, c, dark, cardSizeId, onStatusChange, onDelete }: { order: SubmittedOrder; onClose: () => void; c: Palette; dark: boolean; cardSizeId: string; onStatusChange: (s: SubmittedOrder['status']) => void; onDelete: () => void }) {
+function OrderModal({ order, onClose, c, dark, onStatusChange, onDelete }: { order: SubmittedOrder; onClose: () => void; c: Palette; dark: boolean; onStatusChange: (s: SubmittedOrder['status']) => void; onDelete: () => void }) {
   const corel = generateCorelText(order.form);
   const [copied, setCopied] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -3952,7 +4173,8 @@ function OrderModal({ order, onClose, c, dark, cardSizeId, onStatusChange, onDel
   const previewRef = useRef<HTMLDivElement>(null);
   const reduce = usePrefersReducedMotion();
   const copy = () => { navigator.clipboard?.writeText(corel); setCopied(true); setTimeout(() => setCopied(false), 1500); };
-  const sizeConf = CARD_SIZES.find(s => s.id === cardSizeId);
+  // The size the customer chose — what the preview, PNG and PDF are fitted to.
+  const cardSize = order.form.design.cardSize;
   // wa.me can only pre-fill text, never an image — so the full matter goes as text;
   // the card image is a separate manual attach step in WhatsApp.
   const shareWA = () => { const text = encodeURIComponent(`🌹 *Order ${order.orderId}* — ${order.couple}\n\n${corel}`); window.open(`https://wa.me/?text=${text}`, '_blank'); };
@@ -3980,36 +4202,21 @@ function OrderModal({ order, onClose, c, dark, cardSizeId, onStatusChange, onDel
     if (!previewRef.current || downloadingPng) return;
     setDownloadingPng(true);
     try {
-      const { default: html2canvas } = await import('html2canvas');
-      const canvas = await html2canvas(previewRef.current, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
-      const link = document.createElement('a');
-      link.download = `${fileBase}.png`;
-      link.href = canvas.toDataURL('image/png');
-      link.click();
+      // One PNG per page, each at the card's proportions (see Success).
+      downloadFiles(await cardPngFiles(await cardCanvases(previewRef.current), fileBase));
     } finally {
       setDownloadingPng(false);
     }
   };
-  // Each physical card page (Page 1, Page 2 programmes) becomes its own PDF page,
-  // sized in pixels 1:1 to the captured canvas so nothing gets stretched or clipped.
+  // Each card page becomes its own PDF page at the card's real trim size. This
+  // used to walk previewRef's children, which is one wrapper holding every
+  // page — the same bug that once gave the shared PDF a single tall page.
   const downloadPdf = async () => {
     if (!previewRef.current || downloadingPdf) return;
     setDownloadingPdf(true);
     try {
-      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import('html2canvas'), import('jspdf')]);
-      const pages = Array.from(previewRef.current.children) as HTMLElement[];
-      let doc: InstanceType<typeof jsPDF> | null = null;
-      for (const pageEl of pages) {
-        const canvas = await html2canvas(pageEl, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
-        const orientation = canvas.width > canvas.height ? 'l' : 'p';
-        if (!doc) {
-          doc = new jsPDF({ orientation, unit: 'px', format: [canvas.width, canvas.height], hotfixes: ['px_scaling'] });
-        } else {
-          doc.addPage([canvas.width, canvas.height], orientation);
-        }
-        doc.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, canvas.width, canvas.height);
-      }
-      doc?.save(`${fileBase}.pdf`);
+      const pdf = await cardPdfFile(await cardCanvases(previewRef.current), fileBase);
+      if (pdf) downloadFiles([pdf]);
     } finally {
       setDownloadingPdf(false);
     }
@@ -4114,12 +4321,12 @@ function OrderModal({ order, onClose, c, dark, cardSizeId, onStatusChange, onDel
           <div className="order-2 lg:order-1">
             <div className="flex items-center gap-2 mb-3 flex-wrap">
               <div className="text-[10px] font-bold uppercase tracking-[0.28em]" style={{ color: c.gold }}>Card Preview</div>
-              {sizeConf && <span className="text-[10px] px-2 py-0.5 rounded-full font-bold" style={{ background: `${c.gold}15`, color: c.gold }}>{sizeConf.label} · {sizeConf.widthIn}×{sizeConf.heightIn}"</span>}
+              {isValidCardSize(cardSize) && <span className="text-[10px] px-2 py-0.5 rounded-full font-bold" style={{ background: `${c.gold}15`, color: c.gold }}>{cardSizeName(cardSize)} · {cardSizeText(cardSize)}</span>}
             </div>
             {/* NOTE: this div must contain ONLY <CardPreview /> — the PNG/PDF export
-                captures it (and iterates its children) exactly as it is rendered. */}
+                captures each .wmp-card-page inside it exactly as it is rendered. */}
             <div ref={previewRef}>
-              <CardPreview form={order.form} c={c} dark={dark} compact sizeId={cardSizeId} />
+              <CardPreview form={order.form} c={c} dark={dark} compact />
             </div>
           </div>
 
