@@ -13,7 +13,7 @@ import {
 import type { Palette, FormState, PersonInfo, Programme, SubmittedOrder } from './types';
 import {
   INVITATION_TEMPLATES, DEITIES, RELATION_WORDS, CLOSING_TAGS, KIDS_LINES,
-  PROGRAMME_PRESETS, FONTS, CARD_SIZES, SALUTATIONS
+  PROGRAMME_PRESETS, FONTS, CARD_SIZES, SALUTATIONS, DEFAULT_CARD_SIZE
 } from './data/constants';
 import { fetchOrders, insertOrder, updateOrderStatus, deleteOrder as deleteOrderRow, subscribeToOrders } from './lib/orders';
 import { getSession, onAuthChange, signIn, signOut } from './lib/auth';
@@ -267,6 +267,8 @@ const initialForm: FormState = {
     letterSpacing: 0.5,
     lineHeight: 1.7,
     layout: 'royal',
+    cardSize: DEFAULT_CARD_SIZE,
+    pageMode: 'combined',
   },
   preview: { device: 'desktop' },
   meta: { accepted: false }
@@ -383,7 +385,9 @@ function loadDraft(): FormState {
     const raw = localStorage.getItem(DRAFT_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as FormState;
-      return { ...initialForm, ...parsed, meta: { accepted: false } };
+      // `design` merges one level deeper: a draft saved before cardSize and
+      // pageMode existed would otherwise replace the whole object and drop them.
+      return { ...initialForm, ...parsed, design: { ...initialForm.design, ...parsed.design }, meta: { accepted: false } };
     }
   } catch { /* ignore */ }
   return initialForm;

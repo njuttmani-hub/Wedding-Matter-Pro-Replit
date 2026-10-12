@@ -1,3 +1,5 @@
+import type { CardSize } from '../types';
+
 export const INVITATION_TEMPLATES = [
   { id: 1,  category: 'Classic',    preview: 'Marriage is joyous occasion…',               text: `Marriage is joyous occasion a time to celebrate and we request you to be part of this big event with your family on the wedding of` },
   { id: 2,  category: 'Daughter',   preview: 'Wedding of Daughter brings special joy…',    text: `"Wedding of Daughter bring special joy & Moment of Bidai,\nBecause Daughters are made of Sugar & Spice,\nThey fill the Home with Love & Care, Then Leave Home to make Another,\nThe Day has Arrived in our Life with the wedding of our Beloved Daughter"` },
@@ -151,5 +153,7 @@ export const CARD_SIZES = [
   { id: 'v10x8',   label: 'Vertical 10×8"',     widthIn: 8,  heightIn: 10 },
   { id: 'h10x8',   label: 'Horizontal 10×8"',   widthIn: 10, heightIn: 8 },
 ];
+
+export const DEFAULT_CARD_SIZE: CardSize = { preset: 'sq7x7', widthIn: 7, heightIn: 7, unit: 'in' };
 
 export const SALUTATIONS = ['Shri', 'Smt.', 'Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Late Shri', 'Late Smt.'];

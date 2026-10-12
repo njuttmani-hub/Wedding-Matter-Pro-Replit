@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import type { FormState, SubmittedOrder } from '../types';
+import { DEFAULT_CARD_SIZE } from '../data/constants';
 
 interface OrderRow {
   order_number: number;
@@ -11,12 +12,19 @@ interface OrderRow {
 
 const ORDER_ID_PREFIX = 'WMP-';
 
+const LEGACY_DESIGN_DEFAULTS: Pick<FormState['design'], 'cardSize' | 'pageMode'> = {
+  cardSize: DEFAULT_CARD_SIZE,
+  pageMode: 'combined',
+};
+
 function fromRow(row: OrderRow): SubmittedOrder {
   return {
     orderId: `${ORDER_ID_PREFIX}${row.order_number}`,
     at: new Date(row.created_at).toLocaleString(),
     couple: row.couple,
-    form: row.form,
+    // Orders submitted before cardSize/pageMode existed have neither; fill them
+    // in so the dashboard renders those cards exactly as it always did.
+    form: { ...row.form, design: { ...LEGACY_DESIGN_DEFAULTS, ...row.form.design } },
     status: row.status,
   };
 }
