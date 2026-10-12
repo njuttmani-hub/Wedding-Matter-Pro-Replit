@@ -332,6 +332,26 @@ function kidsLineText(form: FormState): string {
   return KIDS_LINES.find(t => t.id === form.kidsLine)?.label || '';
 }
 
+/** Whether the card gets one sheet per programme. A saved 'separate' choice
+ *  only takes effect with two or more dated programmes — with one, its own
+ *  sheet would just be the combined page under another name, and the wizard
+ *  greys the toggle out then, so preview, export and summary all agree. */
+function separateSheets(form: FormState): boolean {
+  return form.design.pageMode === 'separate' && form.programmes.filter(p => p.date).length >= 2;
+}
+
+/** A programme's printed date and time. A reception with a meal prints its
+ *  time as "from 7:30 PM onwards (dinner)" in place of the bare time. Shared by
+ *  the combined page and the per-programme sheets so the two never drift. */
+function progWhen(f: Programme, long = false): { date: string; time: string } {
+  const date = new Date(f.date + 'T00:00:00').toLocaleDateString('en-IN', long
+    ? { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }
+    : { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+  const meal = f.preset === 'reception' && f.mealType && f.mealType !== 'none';
+  const time = meal ? `from ${fmtTime(f.hour, f.minute, f.ampm)} onwards (${f.mealType})` : fmtTime(f.hour, f.minute, f.ampm);
+  return { date, time };
+}
+
 function generateCorelText(form: FormState): string {
   const template = INVITATION_TEMPLATES.find(t => t.id === form.selectedTemplate);
   const closing = CLOSING_TAGS.find(t => t.id === form.closingTag);
@@ -366,13 +386,25 @@ function generateCorelText(form: FormState): string {
   s += personBlock(aboveRole, above, aboveRelation);
   s += `─── RELATION ───\n${relation?.label || 'Weds'}\n\n`;
   s += personBlock(belowRole, below, belowRelation);
-  s += `─── PROGRAMMES ───\n`;
-  form.programmes.forEach((f, i) => {
-    s += `\n[${i + 1}] ${f.name}\n  Date: ${f.date}\n`;
-    if (f.hour) s += `  Time: ${fmtTime(f.hour, f.minute, f.ampm)}\n`;
-    if (f.venue) s += `  Venue: ${f.venue}\n`;
-    if (f.address) s += `  Address: ${f.address}\n`;
-  });
+  const progBlock = (f: Programme, head: string) => {
+    let b = `\n${head}\n  Date: ${f.date}\n`;
+    if (f.hour) b += `  Time: ${fmtTime(f.hour, f.minute, f.ampm)}\n`;
+    if (f.venue) b += `  Venue: ${f.venue}\n`;
+    if (f.address) b += `  Address: ${f.address}\n`;
+    return b;
+  };
+  if (separateSheets(form)) {
+    // The designer lays out exactly these sheets, so number them the way the
+    // preview labels its pages: the invitation is sheet 1.
+    const dated = form.programmes.filter(f => f.date);
+    s += `─── PROGRAMMES · SEPARATE SHEETS ───\nSheet 1 is the invitation. Each function below gets its own sheet (${dated.length + 1} sheets in all).\n`;
+    dated.forEach((f, i) => { s += progBlock(f, `═══ SHEET ${i + 2} — ${f.name} ═══`); });
+    const undated = form.programmes.filter(f => !f.date);
+    if (undated.length) s += `\nNo date, so not on any sheet: ${undated.map(f => f.name).join(', ')}\n`;
+  } else {
+    s += `─── PROGRAMMES ───\n`;
+    form.programmes.forEach((f, i) => { s += progBlock(f, `[${i + 1}] ${f.name}`); });
+  }
   if (form.family.residenceAddress) s += `\n─── RESIDENCE ───\n${form.family.residenceAddress}\n`;
   if (form.withCompliments) s += `\n─── WITH COMPLIMENTS ───\n${form.withCompliments}\n`;
   if (kidsLine) s += `\n─── KIDS LINE ───\n${kidsLine}\n`;
@@ -1916,10 +1948,10 @@ function Disclosure({ label, hint, defaultOpen = false, c, children }: { label: 
   );
 }
 
-function OptionRow({ active, onClick, c, children }: { active: boolean; onClick: () => void; c: Palette; children: React.ReactNode }) {
+function OptionRow({ active, onClick, c, children, disabled }: { active: boolean; onClick: () => void; c: Palette; children: React.ReactNode; disabled?: boolean }) {
   return (
-    <button type="button" onClick={onClick} aria-pressed={active}
-      className="w-full flex items-start gap-3 p-4 rounded-2xl border text-left transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-2"
+    <button type="button" onClick={onClick} aria-pressed={active} disabled={disabled}
+      className="w-full flex items-start gap-3 p-4 rounded-2xl border text-left transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
       style={{ borderColor: active ? c.gold : c.border, background: active ? `${c.gold}12` : 'transparent', outlineColor: c.gold }}>
       <span className="mt-0.5 w-5 h-5 rounded-full border-2 shrink-0 flex items-center justify-center transition-colors duration-300"
         style={{ borderColor: active ? c.gold : c.border, background: active ? c.gold : 'transparent' }}>
@@ -2523,6 +2555,31 @@ function StepProgrammes({ form, setForm, c }: { form: FormState; setForm: React.
           </AnimatePresence>
         </div>
       )}
+
+      {/* Page split. Shown even with fewer than two dated functions, just
+          disabled, so the option doesn't appear out of nowhere mid-step. */}
+      <div className="mt-8">
+        <GroupHeading label="Programme pages" c={c} />
+        <div className="grid sm:grid-cols-2 gap-2">
+          {([
+            { k: 'combined', l: 'All on one page', d: 'Every function listed together on page 2.' },
+            { k: 'separate', l: 'Separate page for each function', d: 'Each function printed as its own card insert.' },
+          ] as const).map(o => (
+            // Reflects what will actually print (see separateSheets), not the
+            // raw saved choice, which may still say 'separate' from earlier.
+            <OptionRow key={o.k} active={(separateSheets(form) ? 'separate' : 'combined') === o.k} disabled={dated < 2}
+              onClick={() => setForm(prev => ({ ...prev, design: { ...prev.design, pageMode: o.k } }))} c={c}>
+              <span className="block text-[13px] leading-snug font-semibold" style={{ color: c.text }}>{o.l}</span>
+              <span className="block text-[11px] leading-snug font-medium mt-1" style={{ color: c.subtext }}>{o.d}</span>
+            </OptionRow>
+          ))}
+        </div>
+        {dated < 2 && (
+          <p className="text-[11px] font-medium mt-2.5" style={{ color: c.subtext }}>
+            This choice opens up once two or more functions have a date.
+          </p>
+        )}
+      </div>
     </Section>
   );
 }
@@ -2864,6 +2921,7 @@ function StepSubmit({ form, update, c, onSubmit, setStep, submitting }: { form: 
     { label: 'Deities', step: 1, value: `${form.deities.length} selected`, icon: Star, ok: form.deities.length > 0 },
     { label: 'Template', step: 2, value: template ? `#${template.id} · ${template.category}` : 'Not selected', icon: BookOpen, ok: !!template },
     { label: 'Programmes', step: 3, value: `${form.programmes.filter(p => p.date).length} with dates`, icon: Calendar, ok: form.programmes.some(p => p.date) && !form.programmes.some(p => isPastDate(p.date)) },
+    { label: 'Programme Pages', step: 3, value: separateSheets(form) ? `Separate page for each function (${form.programmes.filter(p => p.date).length + 1} pages)` : 'All on one page', icon: Copy, ok: true },
     { label: 'Closing Line', step: 4, value: closing?.label || '—', icon: FileText, ok: true },
     { label: 'Design', step: 5, value: `${form.design.language} · ${form.design.layout}`, icon: Type, ok: true },
   ];
@@ -3130,17 +3188,17 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
     </div>
   );
 
-  const hasProgrammes = form.programmes.some(p => p.date);
-  const pageProgrammes = hasProgrammes ? (
+  const datedProgrammes = form.programmes.filter(f => f.date);
+  const separate = separateSheets(form);
+  const pageProgrammes = datedProgrammes.length && !separate ? (
     <div className={`relative ${compact ? 'p-5 pt-6' : 'p-7 sm:p-10 pt-8'} text-center`}
       style={{ fontFamily: form.design.bodyFont, fontSize: `${form.design.fontSize}px`, letterSpacing: `${form.design.letterSpacing}px`, lineHeight: form.design.lineHeight }}>
       <DecorativeDivider compact={compact} mini />
       <div className="text-[10px] font-bold mb-3 mt-2" style={{ color: '#1A1A1A', letterSpacing: '0.4em', fontFamily: form.design.headingFont }}>◈ PROGRAMMES ◈</div>
       <div className="grid gap-2">
-        {form.programmes.filter(f => f.date).map(f => {
+        {datedProgrammes.map(f => {
           const preset = PROGRAMME_PRESETS.find(p => p.id === f.preset);
-          const isReception = f.preset === 'reception';
-          const mealText = isReception && f.mealType && f.mealType !== 'none' ? ` from ${fmtTime(f.hour, f.minute, f.ampm)} onwards (${f.mealType})` : null;
+          const when = progWhen(f);
           return (
             <div key={f.id} className="rounded-xl p-2.5 text-left" style={{ background: `linear-gradient(135deg, ${preset?.color || '#C0892E'}12, transparent)`, border: `1px solid ${preset?.color || '#C0892E'}28` }}>
               <div className="flex items-start gap-2">
@@ -3148,9 +3206,8 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
                 <div className="flex-1 min-w-0">
                   <div className="font-bold leading-tight" style={{ fontFamily: form.design.headingFont, fontSize: '1em', color: '#1A1A1A' }}>{f.name}</div>
                   <div className="text-[10px] mt-0.5 font-semibold">
-                    {new Date(f.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
-                    {f.hour && !mealText ? <span className="opacity-65"> · {fmtTime(f.hour, f.minute, f.ampm)}</span> : null}
-                    {mealText ? <span className="opacity-65"> · {mealText}</span> : null}
+                    {when.date}
+                    {when.time ? <span className="opacity-65"> · {when.time}</span> : null}
                   </div>
                   {f.venue && <div className="text-[10px] font-bold mt-0.5" style={{ color: '#1A1A1A' }}>{f.venue}</div>}
                   {f.address && <div className="text-[10px] opacity-65 mt-0.5 leading-tight">{f.address}</div>}
@@ -3162,6 +3219,33 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
       </div>
     </div>
   ) : null;
+
+  // One standalone insert per programme, laid out to fill its sheet rather than
+  // reuse the combined page's small row. `minHeight: inherit` takes on whatever
+  // print-proportion height the paper shell sets, so the matter centres on the
+  // whole sheet; the inner floor keeps it card-shaped when the shell sets none.
+  const programmeSheet = (f: Programme) => {
+    const preset = PROGRAMME_PRESETS.find(p => p.id === f.preset);
+    const when = progWhen(f, true);
+    return (
+      <div className="relative flex flex-col justify-center" style={{ minHeight: 'inherit' }}>
+        <div className={`flex flex-col items-center justify-center text-center ${compact ? 'px-6 py-10' : 'px-8 sm:px-12 py-14'}`}
+          style={{ minHeight: compact ? 300 : 460, fontFamily: form.design.bodyFont, fontSize: `${form.design.fontSize}px`, letterSpacing: `${form.design.letterSpacing}px`, lineHeight: form.design.lineHeight }}>
+          <DecorativeDivider compact={compact} />
+          <div className={`${compact ? 'text-2xl' : 'text-3xl'} mt-4 leading-none`} aria-hidden="true">{preset?.icon || '✨'}</div>
+          <div className="font-medium leading-tight mt-3" style={{ fontFamily: form.design.headingFont, fontSize: compact ? '2em' : '2.8em', color: '#111111' }}>
+            {f.name}
+          </div>
+          <div className="w-14 h-px my-4" style={{ background: '#C0892E' }} />
+          <div className="font-semibold" style={{ color: '#1A1A1A' }}>{when.date}</div>
+          {when.time && <div className="mt-1 opacity-70" style={{ fontSize: '0.92em' }}>{when.time}</div>}
+          {f.venue && <div className="mt-5 font-bold" style={{ fontFamily: form.design.headingFont, fontSize: '1.15em', color: '#1A1A1A' }}>{f.venue}</div>}
+          {f.address && <div className="mt-1 opacity-65 max-w-xs whitespace-pre-line" style={{ fontSize: '0.85em' }}>{f.address}</div>}
+          <div className="mt-6"><DecorativeDivider compact={compact} mini /></div>
+        </div>
+      </div>
+    );
+  };
 
   // ── Paper shell: the card reads as a real sheet resting on the stage.
   //    `wmp-hero-card` carries the theme-aware shadow ladder + gold ring;
@@ -3194,12 +3278,19 @@ function CardPreview({ form, c, dark, compact, sizeId }: { form: FormState; c: P
     </div>
   );
 
-  const hasTwoPages = !!pageProgrammes;
+  const hasTwoPages = !!pageProgrammes || separate;
 
   return (
     <div className="@container space-y-5">
       {paper(pageContent, 'Page 1 · Invitation', hasTwoPages)}
       {pageProgrammes && paper(pageProgrammes, 'Page 2 · Programmes', true)}
+      {/* Keyed wrappers: paper() has no key of its own, and the sheet list
+          changes length as programmes are dated or removed. */}
+      {separate && datedProgrammes.map((f, i) => (
+        <React.Fragment key={f.id}>
+          {paper(programmeSheet(f), `Page ${i + 2} · ${f.name || PROGRAMME_PRESETS.find(p => p.id === f.preset)?.name || 'Function'}`, true)}
+        </React.Fragment>
+      ))}
     </div>
   );
 }
