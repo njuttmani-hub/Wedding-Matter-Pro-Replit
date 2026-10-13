@@ -45,6 +45,16 @@ export interface Programme {
   mealType?: 'none' | 'dinner' | 'lunch';
 }
 
+/** The printed card's trim size. Always stored in inches whatever the customer
+ *  typed; `unit` only remembers which unit to show back to them. `preset` is a
+ *  CARD_SIZES id, or 'custom' when they entered their own dimensions. */
+export interface CardSize {
+  preset: string;
+  widthIn: number;
+  heightIn: number;
+  unit: 'in' | 'cm';
+}
+
 export interface FormState {
   bride: PersonInfo;
   groom: PersonInfo;
@@ -74,6 +84,10 @@ export interface FormState {
     letterSpacing: number;
     lineHeight: number;
     layout: string;
+    cardSize: CardSize;
+    /** 'combined': page 1 invitation + page 2 listing every programme.
+     *  'separate': page 1 invitation + one sheet per programme. */
+    pageMode: 'combined' | 'separate';
   };
   preview: { device: string };
   meta: { accepted: boolean };
