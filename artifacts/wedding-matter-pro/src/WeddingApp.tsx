@@ -726,7 +726,7 @@ function Nav({ mode, setMode, dark, setDark, c, orderCount, session, onSignOut }
                   onClick={() => setMode(key)}
                   aria-pressed={active}
                   aria-label={`${label} mode`}
-                  className="relative flex items-center gap-1.5 px-3 sm:px-4 py-1.5 rounded-full text-[12px] transition-colors duration-200"
+                  className="relative flex items-center gap-1.5 px-3 sm:px-4 py-2 sm:py-1.5 rounded-full text-[12px] transition-colors duration-200"
                   style={{
                     background: active ? `linear-gradient(135deg, ${c.primary}, ${c.gold})` : 'transparent',
                     color: active ? c.onAccent : c.subtext,
@@ -1084,8 +1084,8 @@ function CustomerFlow({ c, dark, addOrder, onBack }: { c: Palette; dark: boolean
         </button>
       </div>
 
-      <div className="grid lg:grid-cols-12 gap-6 xl:gap-8 mt-4 lg:mt-6 items-start">
-        <div className="lg:col-span-7 xl:col-span-6">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 xl:gap-8 mt-4 lg:mt-6 items-start">
+        <div className="min-w-0 lg:col-span-7 xl:col-span-6">
           <AnimatePresence mode="wait">
             <motion.div key={step} initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -16 }} transition={{ duration: 0.28 }}>
               {step === 0 && <StepFamily form={form} update={update} setForm={setForm} c={c} dark={dark} />}
@@ -1101,27 +1101,29 @@ function CustomerFlow({ c, dark, addOrder, onBack }: { c: Palette; dark: boolean
           <NavButtons step={step} prev={prev} next={next} onSubmit={submit} c={c} canNext={canNext} submitting={submitting} />
         </div>
 
-        <div className="lg:col-span-5 xl:col-span-6">
+        <div className="min-w-0 lg:col-span-5 xl:col-span-6">
           <div className="lg:sticky lg:top-[4.5rem]">
             <div className="rounded-[1.75rem] border overflow-hidden shadow-2xl"
               style={{ borderColor: c.border, background: c.surface }}>
 
               {/* ── Header ─────────────────────────────────────────────── */}
-              <div className="flex items-end justify-between gap-3 px-4 sm:px-5 py-3 border-b" style={{ borderColor: c.border }}>
-                <div className="min-w-0">
+              {/* Wraps the controls under the names when the column is narrow (around
+                  1024px) rather than squeezing "Live Preview" onto two lines. */}
+              <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-2 px-4 sm:px-5 py-3 border-b" style={{ borderColor: c.border }}>
+                <div className="min-w-[13rem] flex-1">
                   <div className="flex items-center gap-2">
                     <span className="relative flex w-1.5 h-1.5">
                       <span className="absolute inline-flex w-full h-full rounded-full opacity-60 animate-ping" style={{ background: c.gold }} />
                       <span className="relative inline-flex w-1.5 h-1.5 rounded-full" style={{ background: c.gold }} />
                     </span>
-                    <span className="text-[10px] font-bold uppercase tracking-[0.3em]" style={{ color: c.gold }}>Live Preview</span>
+                    <span className="text-[10px] font-bold uppercase tracking-[0.3em] whitespace-nowrap" style={{ color: c.gold }}>Live Preview</span>
                   </div>
                   <div className="truncate leading-tight mt-0.5"
                     style={{ fontFamily: "'Playfair Display', serif", fontSize: '1.15rem', color: coupleNames ? c.text : c.subtext }}>
                     {coupleNames || 'Untitled invitation'}
                   </div>
                 </div>
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center gap-1.5 shrink-0 ml-auto">
                   <ZoomControls zoom={previewZoom} setZoom={setPreviewZoom} c={c} className="hidden sm:flex" />
                   <button
                     type="button"
@@ -1686,7 +1688,7 @@ function Section({ title, subtitle, children, c, icon: Icon, eyebrow, tip }: { t
         boxShadow: `0 26px 64px -34px ${withAlpha(c.ink, 0.45)}`,
       }}
     >
-      <header className="px-5 sm:px-8 pt-6 sm:pt-7 pb-5">
+      <header className="px-4 sm:px-8 pt-6 sm:pt-7 pb-5">
         {eyebrow && (
           <div className="text-[10px] font-bold uppercase tracking-[0.3em] mb-2.5" style={{ color: withAlpha(c.gold, 0.95) }}>
             {eyebrow}
@@ -1727,9 +1729,9 @@ function Section({ title, subtitle, children, c, icon: Icon, eyebrow, tip }: { t
         )}
       </header>
 
-      <div aria-hidden className="h-px mx-5 sm:mx-8" style={{ background: `linear-gradient(90deg, transparent, ${withAlpha(c.gold, 0.4)}, transparent)` }} />
+      <div aria-hidden className="h-px mx-4 sm:mx-8" style={{ background: `linear-gradient(90deg, transparent, ${withAlpha(c.gold, 0.4)}, transparent)` }} />
 
-      <div className="px-5 sm:px-8 py-6 sm:py-8">{children}</div>
+      <div className="px-4 sm:px-8 py-6 sm:py-8">{children}</div>
     </section>
   );
 }
@@ -1825,7 +1827,9 @@ function Select({ c, children, className = '', fieldSize = 'md', invalid, style,
 function SalutNameField({ label, salValue, salPath, nameValue, namePath, namePlaceholder, required, update, c }: { label: string; salValue: string; salPath: string; nameValue: string; namePath: string; namePlaceholder?: string; required?: boolean; update: (path: string, value: unknown) => void; c: Palette }) {
   return (
     <Field label={label} required={required} c={c}>
-      <div className="flex gap-2">
+      {/* Wraps the name under the title on the narrowest phones rather than
+          squeezing it until a parent's name no longer fits. */}
+      <div className="flex flex-wrap gap-2">
         <Select
           c={c}
           aria-label={`${label} — title`}
@@ -1847,7 +1851,7 @@ function SalutNameField({ label, salValue, salPath, nameValue, namePath, namePla
         </Select>
         <Input
           c={c}
-          className="flex-1 min-w-0"
+          className="flex-1 min-w-[8.5rem]"
           aria-label={label}
           value={nameValue}
           onChange={e => update(namePath, e.target.value)}
@@ -2031,7 +2035,7 @@ function StepFamily({ form, update, setForm, c, dark }: { form: FormState; updat
           each other squeezed every name field to ~160px and clipped the
           placeholders. Full width gives the fields room to actually be read. */}
       <GroupHeading label="Names on the card" note="Required" c={c} />
-      <div className="grid gap-4">
+      <div className="grid grid-cols-1 gap-4">
         <PersonCard side="Bride" person={form.bride} update={update} prefix="bride" c={c} />
         <PersonCard side="Groom" person={form.groom} update={update} prefix="groom" c={c} />
       </div>
@@ -2084,7 +2088,7 @@ function StepFamily({ form, update, setForm, c, dark }: { form: FormState; updat
       <div className="mt-8">
         <GroupHeading label="Family details" note="Optional" c={c} />
         <Disclosure label="Title, native place & residence" hint={hasFamilyDetails ? 'Filled' : 'Not added'} defaultOpen={hasFamilyDetails} c={c}>
-          <div className="grid sm:grid-cols-2 gap-4 pt-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
             <Field label="Family Title" hint="e.g. Parivaar" c={c}>
               <Input c={c} value={form.family.title} onChange={e => update('family.title', e.target.value)} placeholder="Parivaar" />
             </Field>
@@ -2113,7 +2117,7 @@ function PersonCard({ side, person, update, prefix, c }: { side: string; person:
   return (
     <div className="@container rounded-2xl border overflow-hidden" style={{ borderColor: c.border, background: `linear-gradient(180deg, ${tone}0A, transparent 55%)` }}>
       <div className="h-[3px]" style={{ background: `linear-gradient(90deg, ${tone}, ${c.gold}66, transparent)` }} />
-      <div className="p-5">
+      <div className="p-4 sm:p-5">
         <div className="flex items-center gap-2 mb-4">
           <span className="text-base leading-none" aria-hidden="true">{isBride ? '👰' : '🤵'}</span>
           <span className="text-[10px] font-bold uppercase tracking-[0.32em]" style={{ color: tone }}>{side}</span>
@@ -2284,7 +2288,7 @@ function StepInvitation({ form, update, c, dark }: { form: FormState; update: (p
               style={{ borderColor: c.border, color: c.goldDeep, background: `${c.gold}12`, outlineColor: c.gold }}>Show all texts</button>
           </div>
         ) : (
-          <div className="grid gap-3 max-h-[540px] overflow-y-auto pr-1 -mr-1" style={{ scrollbarWidth: 'thin' }}>
+          <div className="grid grid-cols-1 gap-3 max-h-[540px] overflow-y-auto pr-1 -mr-1" style={{ scrollbarWidth: 'thin' }}>
             {filtered.map(t => {
               const active = form.selectedTemplate === t.id;
               return (
@@ -2497,8 +2501,10 @@ function StepProgrammes({ form, setForm, c }: { form: FormState; setForm: React.
 
                     <div className="flex-1 min-w-0 self-center py-0.5">
                       <input value={f.name} onChange={e => updateProg(f.id, 'name', e.target.value)} placeholder="Function name" aria-label="Function name"
-                        className="w-full bg-transparent outline-none min-w-0 rounded-md leading-tight focus-visible:outline-2 focus-visible:outline-offset-2"
-                        style={{ color: c.text, fontFamily: "'Playfair Display', serif", fontSize: '1.25rem', fontWeight: 600, outlineColor: c.gold }} />
+                        className="w-full bg-transparent outline-none min-w-0 rounded-md leading-tight py-1 focus-visible:outline-2 focus-visible:outline-offset-2"
+                        // Shrinks a little on narrow phones, then ellipsizes: an input can't wrap,
+                        // and the arrows, icon and chevron leave "Wedding Ceremony" ~150px there.
+                        style={{ color: c.text, fontFamily: "'Playfair Display', serif", fontSize: 'clamp(1.05rem, 4.4vw, 1.25rem)', fontWeight: 600, textOverflow: 'ellipsis', outlineColor: c.gold }} />
                       <div className="text-[11px] font-medium truncate mt-0.5" style={{ color: f.date && !past ? c.subtext : c.accent }}>{summary}</div>
                     </div>
 
@@ -2516,7 +2522,7 @@ function StepProgrammes({ form, setForm, c }: { form: FormState; setForm: React.
                       <motion.div key="body" initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
                         transition={{ duration: 0.3, ease: 'easeOut' }} style={{ overflow: 'hidden' }}>
                         <div className="p-4 pt-4 space-y-4 border-t" style={{ borderColor: c.border }}>
-                          <div className="grid sm:grid-cols-2 gap-4">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <Field label="Date" required c={c}
                               error={past ? 'That date has already passed. Please pick today or a later date.' : undefined}>
                               <Input c={c} type="date" min={todayISO()} value={f.date} invalid={past}
@@ -2587,7 +2593,7 @@ function StepProgrammes({ form, setForm, c }: { form: FormState; setForm: React.
           disabled, so the option doesn't appear out of nowhere mid-step. */}
       <div className="mt-8">
         <GroupHeading label="Programme pages" c={c} />
-        <div className="grid sm:grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {([
             { k: 'combined', l: 'All on one page', d: 'Every function listed together on page 2.' },
             { k: 'separate', l: 'Separate page for each function', d: 'Each function printed as its own card insert.' },
@@ -2630,7 +2636,7 @@ function StepExtras({ form, update, c }: { form: FormState; update: (path: strin
         </div>
 
         <GroupHeading label="Choose one" note={`${CLOSING_TAGS.length} options`} c={c} />
-        <div className="grid sm:grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {CLOSING_TAGS.map(t => (
             <OptionRow key={t.id} active={form.closingTag === t.id} onClick={() => update('closingTag', t.id)} c={c}>
               <span className="block text-[13px] leading-snug font-semibold" style={{ color: c.text }}>{t.label}</span>
@@ -2641,7 +2647,7 @@ function StepExtras({ form, update, c }: { form: FormState; update: (path: strin
 
       <div className="mt-5">
         <Section title="Kids Message" eyebrow="Optional" subtitle="A playful line from the little ones — leave it out if you prefer." c={c} icon={Heart}>
-          <div className="grid gap-2">
+          <div className="grid grid-cols-1 gap-2">
             <OptionRow active={form.kidsLine === ''} onClick={() => update('kidsLine', '')} c={c}>
               <span className="block text-[13px] leading-snug font-semibold italic" style={{ color: c.subtext }}>No kids message</span>
             </OptionRow>
@@ -2745,7 +2751,7 @@ function StepDesign({ form, update, c, dark }: { form: FormState; update: (path:
 
       {/* Sliders */}
       <GroupHeading label="Size & spacing" c={c} />
-      <div className="grid sm:grid-cols-3 gap-5 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-8">
         <div>
           <SliderField label="Font Size" value={form.design.fontSize} min={12} max={22} step={1} unit="px" onChange={v => update('design.fontSize', v)} c={c} />
           <div className="text-[11px] font-medium mt-1.5" style={{ color: c.subtext }}>How big the writing is</div>
@@ -2791,7 +2797,7 @@ function StepDesign({ form, update, c, dark }: { form: FormState; update: (path:
         {filtered.length === 0 ? (
           <div className="text-center py-10 px-6 text-[13px] font-semibold" style={{ color: c.subtext }}>No fonts match that search.</div>
         ) : (
-          <div className="grid sm:grid-cols-2 gap-2 max-h-[340px] overflow-y-auto p-3 border-t" style={{ borderColor: c.border, scrollbarWidth: 'thin' }}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[340px] overflow-y-auto p-3 border-t" style={{ borderColor: c.border, scrollbarWidth: 'thin' }}>
             {filtered.map(f => {
               const active = currentFamily === f.family;
               return (
@@ -2872,7 +2878,7 @@ function CardSizePicker({ size, onChange, c }: { size: CardSize; onChange: (s: C
   return (
     <div className="mb-8">
       <GroupHeading label="Card size" note={cardSizeText(size)} c={c} />
-      <div className="grid sm:grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {CARD_SIZES.map(p => {
           const on = size.preset === p.id;
           return (
@@ -3036,7 +3042,7 @@ function StepPreview({ form, update, c, dark }: { form: FormState; update: (path
       <div className="relative rounded-[1.5rem] overflow-hidden" style={{ background: stageBg, boxShadow: stageInset }}>
         <div className="absolute inset-0 pointer-events-none"
           style={{ background: `radial-gradient(115% 65% at 50% -8%, ${c.gold}16 0%, transparent 62%)` }} />
-        <div className={`wmp-print-area relative mx-auto px-4 sm:px-8 py-8 sm:py-12 transition-all duration-500 ${wide ? 'max-w-2xl' : 'max-w-sm'}`}>
+        <div className={`wmp-print-area relative mx-auto px-2.5 sm:px-8 py-5 sm:py-12 transition-all duration-500 ${wide ? 'max-w-2xl' : 'max-w-sm'}`}>
           <CardPreview form={form} c={c} dark={dark} />
         </div>
       </div>
@@ -3100,7 +3106,7 @@ function StepSubmit({ form, update, c, onSubmit, setStep, submitting }: { form: 
               </span>
               <div className="flex-1 min-w-0">
                 <div className="text-[10px] font-bold uppercase tracking-[0.2em]" style={{ color: c.subtext }}>{s.label}</div>
-                <div className="text-[14px] font-semibold truncate" style={{ color: c.text }}>{s.value}</div>
+                <div className="text-[14px] font-semibold leading-snug break-words" style={{ color: c.text }}>{s.value}</div>
               </div>
               <button type="button" onClick={() => setStep(s.step)} aria-label={`Edit ${s.label}`}
                 className="shrink-0 inline-flex items-center gap-1.5 min-h-[44px] px-3.5 rounded-full text-[10px] font-bold uppercase tracking-[0.16em] transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-2"
@@ -3328,7 +3334,7 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
       style={{ fontFamily: form.design.bodyFont, fontSize: `${form.design.fontSize}px`, letterSpacing: `${form.design.letterSpacing}px`, lineHeight: form.design.lineHeight }}>
       <DecorativeDivider compact={compact} mini />
       <div className="text-[10px] font-bold mb-3 mt-2" style={{ color: '#1A1A1A', letterSpacing: '0.4em', fontFamily: form.design.headingFont }}>◈ PROGRAMMES ◈</div>
-      <div className="grid gap-2">
+      <div className="grid grid-cols-1 gap-2">
         {datedProgrammes.map(f => {
           const preset = PROGRAMME_PRESETS.find(p => p.id === f.preset);
           const when = progWhen(f);
@@ -4406,7 +4412,7 @@ function OrderModal({ order, onClose, c, dark, onStatusChange, onDelete }: { ord
         </div>
 
         {/* Body */}
-        <div className="px-4 sm:px-6 pt-5 pb-6 grid lg:grid-cols-2 gap-5 lg:gap-6">
+        <div className="px-4 sm:px-6 pt-5 pb-6 grid grid-cols-1 lg:grid-cols-2 gap-5 lg:gap-6">
           {/* Card preview */}
           <div className="order-2 lg:order-1">
             <div className="flex items-center gap-2 mb-3 flex-wrap">
