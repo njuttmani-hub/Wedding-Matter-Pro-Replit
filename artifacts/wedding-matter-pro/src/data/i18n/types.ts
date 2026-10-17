@@ -1,0 +1,60 @@
+/** Every piece of fixed wording the printed card can carry, in one language.
+ *
+ *  Keyed by the ids in data/constants.ts, so the English source of truth stays
+ *  there and a translation only has to say what each id reads as. A language
+ *  file may leave any entry out: the card falls back to English for that one
+ *  piece rather than printing nothing (see `cardStrings()` in WeddingApp). */
+export interface CardStrings {
+  /** INVITATION_TEMPLATES text, by template id. Keep the line breaks (\n) and
+   *  the overall shape of the English; these are read aloud-style card matter,
+   *  not literal translations. */
+  templates: Record<number, string>;
+  /** RELATION_WORDS label, by id ("Weds"). */
+  relationWords: Record<string, string>;
+  /** CLOSING_TAGS label, by id ("Blessings Only"). */
+  closingTags: Record<string, string>;
+  /** KIDS_LINES label, by id. Keep the emoji. */
+  kidsLines: Record<string, string>;
+  /** PROGRAMME_PRESETS name, by id ("Haldi", "Wedding Ceremony"). */
+  programmes: Record<string, string>;
+  /** SALUTATIONS, by the English value ("Shri" → "श्री", "Late Shri" → "स्व. श्री"). */
+  salutations: Record<string, string>;
+  labels: CardLabels;
+}
+
+export interface CardLabels {
+  /** Heading above the residence address: "Residence:" */
+  residence: string;
+  /** Heading above the compliments names: "With Best Compliments:" */
+  withCompliments: string;
+  /** Before the bride's parents: "D/o" (daughter of). */
+  daughterOf: string;
+  /** Before the groom's parents: "S/o" (son of). */
+  sonOf: string;
+  /** Joins two names: " & " (keep the surrounding spaces). */
+  and: string;
+  /** Heading of the combined programmes page: "Programmes" */
+  programmes: string;
+  /** How a time prints. Placeholders: {h} hour, {m} minutes, {ampm} the am/pm
+   *  word below. English "{h}:{m} {ampm}"; Marathi might be "{ampm} {h}.{m} वा." */
+  timePattern: string;
+  am: string;
+  pm: string;
+  /** A reception's time with its meal: "from {time} onwards ({meal})" */
+  mealFrom: string;
+  dinner: string;
+  lunch: string;
+  /** Top line of a separate function sheet, before the function name, e.g.
+   *  "request the pleasure of your presence at the". {hosts} is replaced with
+   *  the host parents' names, or removed when there are none. */
+  sheetInvite: string;
+  /** Line after the function name on a separate sheet, before the couple's
+   *  names: "of" (as in "the Haldi ceremony of Aditi & Rohan"). */
+  sheetOf: string;
+  /** Heading above the per-function note on a separate sheet ("Note"). */
+  note: string;
+}
+
+/** What a language file exports: any subset of CardStrings, one level deep.
+ *  Missing entries fall back to English. */
+export type CardTranslation = { [K in Exclude<keyof CardStrings, 'labels'>]?: CardStrings[K] } & { labels?: Partial<CardLabels> };

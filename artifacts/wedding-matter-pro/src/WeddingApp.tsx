@@ -259,7 +259,7 @@ const initialForm: FormState = {
   withCompliments: '',
   blessingsOnly: true,
   design: {
-    language: 'English',
+    language: 'en',
     headingFont: "'Cormorant Garamond', serif",
     bodyFont: "'EB Garamond', serif",
     scriptFont: "'Tangerine', cursive",
