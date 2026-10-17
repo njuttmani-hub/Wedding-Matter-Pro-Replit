@@ -21,6 +21,7 @@ import { CARD_LANGUAGES } from './data/languages';
 import { langOf, cardStrings, scriptText, cardDate, cardTime, childOf } from './lib/cardText';
 import { scriptFields, scriptValue, isLatinCard, personName, programmeName, fontHasScript, withLanguage, type ScriptField } from './lib/scriptFields';
 import { useScriptSuggestions, type ScriptSuggestions } from './lib/useScriptSuggestions';
+import { fontsUsed } from './lib/fontsUsed';
 
 /* ─── Storage keys ───────────────────────────────────────────────────────── */
 const DRAFT_KEY = 'wmp_draft_v3';
@@ -4434,6 +4435,15 @@ async function cardCanvases(root: HTMLElement): Promise<CardCanvas[]> {
 // after submitting an order). Dev server only; production builds drop it.
 if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__wmpCardCanvases = cardCanvases;
 
+/** The card as SVG files for CorelDRAW, one per page (see lib/svgExport.ts).
+ *  Loaded on demand: the exporter, and for outlines HarfBuzz and the font
+ *  files, never ship in the main bundle. */
+async function cardSvgFiles(root: HTMLElement, base: string, variant: 'editable' | 'outlined') {
+  const { cardSvgFiles } = await import('./lib/svgExport');
+  return cardSvgFiles(root, base, variant);
+}
+if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__wmpCardSvgs = cardSvgFiles;
+
 async function cardPngFiles(pages: CardCanvas[], base: string): Promise<File[]> {
   const files: File[] = [];
   for (let i = 0; i < pages.length; i++) {
@@ -4500,6 +4510,83 @@ function downloadFiles(files: File[]) {
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
+}
+
+/** The two SVG downloads for a designer opening the card in CorelDRAW, with
+ *  what each one needs. A designer download only: never attached when sharing. */
+function SvgExportButtons({ previewRef, fileBase, form, c, dark }: {
+  previewRef: React.RefObject<HTMLDivElement | null>; fileBase: string; form: FormState; c: Palette; dark: boolean;
+}) {
+  const [busy, setBusy] = useState<'editable' | 'outlined' | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [failed, setFailed] = useState(false);
+  const fonts = fontsUsed(form);
+  const lang = langOf(form);
+  const run = async (variant: 'editable' | 'outlined') => {
+    if (!previewRef.current || busy) return;
+    setBusy(variant); setFailed(false);
+    try {
+      const res = await cardSvgFiles(previewRef.current, fileBase, variant);
+      setWarnings(res.warnings);
+      downloadFiles(res.files);
+    } catch (err) {
+      console.error(err);
+      setFailed(true);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const btn: React.CSSProperties = { minHeight: 50, borderColor: c.border, color: c.text, background: dark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.7)' };
+  const label = (variant: 'editable' | 'outlined', text: string) => busy === variant
+    ? <><Loader2 className="w-4 h-4 animate-spin shrink-0" aria-hidden="true" /> Preparing…</>
+    : <><Download className="w-4 h-4 shrink-0" aria-hidden="true" /> {text}</>;
+  return (
+    <div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+        <button type="button" onClick={() => run('editable')} disabled={!!busy}
+          className="flex items-center justify-center gap-2 px-3 rounded-2xl text-sm font-bold border text-center transition hover:opacity-85 disabled:opacity-60 disabled:cursor-wait"
+          style={btn} {...focusRing(`${c.gold}55`)}>
+          {label('editable', 'SVG for CorelDRAW (editable text)')}
+        </button>
+        <button type="button" onClick={() => run('outlined')} disabled={!!busy}
+          className="flex items-center justify-center gap-2 px-3 rounded-2xl text-sm font-bold border text-center transition hover:opacity-85 disabled:opacity-60 disabled:cursor-wait"
+          style={btn} {...focusRing(`${c.gold}55`)}>
+          {label('outlined', 'SVG for CorelDRAW (outlined, exact look)')}
+        </button>
+      </div>
+      <div className="text-xs mt-2.5 font-medium leading-relaxed" style={{ color: c.subtext }}>
+        One file per page, at the card's real size. <strong style={{ color: c.text }}>Outlined</strong> needs nothing installed — every letter is a shape, so it looks exactly like the preview, but the wording can't be retyped.{' '}
+        <strong style={{ color: c.text }}>Editable</strong> keeps the text as text, so first install {fonts.length === 1 ? 'this free font' : 'these free fonts'} in Windows:
+        <ul className="mt-1.5 space-y-0.5">
+          {fonts.map(f => (
+            <li key={f.name}>
+              <a href={f.url} target="_blank" rel="noopener noreferrer" className="font-bold underline underline-offset-2" style={{ color: c.gold }}>{f.name}</a>
+              {' '}— {f.roles.join(', ')}
+            </li>
+          ))}
+        </ul>
+        {lang.code !== 'en' && (
+          <div className="mt-1.5">
+            This card is in {lang.name}. CorelDRAW 14 may jumble {lang.script} letters in editable text (joined letters and vowel signs can come apart), so the outlined file is recommended.
+          </div>
+        )}
+      </div>
+      {failed && (
+        <div className="text-xs mt-2 font-semibold flex items-start gap-1.5" style={{ color: '#DC2626' }} role="alert">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" /> The SVG could not be made. Please try again.
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <ul className="text-xs mt-2 font-medium leading-snug space-y-1" style={{ color: c.subtext }} aria-live="polite">
+          {warnings.map(w => (
+            <li key={w} className="flex items-start gap-1.5">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: c.gold }} aria-hidden="true" /> <span>{w}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 /** Sends the matter and the card files together.
@@ -4787,6 +4874,9 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
               style={{ borderColor: c.border, background: dark ? 'rgba(0,0,0,0.32)' : 'rgba(255,255,255,0.7)', color: c.text, opacity: 0.85 }}>{corel}</pre>
           </div>
         )}
+        <div className="px-4 sm:px-6 pb-5">
+          <SvgExportButtons previewRef={previewRef} fileBase={fileBase} form={form} c={c} dark={dark} />
+        </div>
       </motion.div>
 
       <button onClick={onReset}
@@ -5293,6 +5383,9 @@ function OrderModal({ order, onClose, c, dark, onStatusChange, onDelete }: { ord
                   {...focusRing(`${c.gold}55`)}>
                   {downloadingPdf ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <FileText className="w-4 h-4" aria-hidden="true" />} {downloadingPdf ? 'Preparing…' : 'PDF File'}
                 </button>
+              </div>
+              <div className="mt-2.5">
+                <SvgExportButtons previewRef={previewRef} fileBase={fileBase} form={order.form} c={c} dark={dark} />
               </div>
               <button onClick={shareWA}
                 className="w-full mt-2.5 flex items-center justify-center gap-2 rounded-2xl text-white text-sm font-bold transition hover:opacity-90"
