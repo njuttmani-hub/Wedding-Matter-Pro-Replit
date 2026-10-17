@@ -44,13 +44,12 @@ export interface CardLabels {
   mealFrom: string;
   dinner: string;
   lunch: string;
-  /** Top line of a separate function sheet, before the function name, e.g.
-   *  "request the pleasure of your presence at the". {hosts} is replaced with
-   *  the host parents' names, or removed when there are none. */
+  /** The invitation sentence on a separate function sheet, under the
+   *  function's name. One whole sentence so each language can order it
+   *  naturally. Placeholders: {hosts} the host parents (removed with its
+   *  spacing when there are none), {function} the function's name,
+   *  {couple} the couple's names. */
   sheetInvite: string;
-  /** Line after the function name on a separate sheet, before the couple's
-   *  names: "of" (as in "the Haldi ceremony of Aditi & Rohan"). */
-  sheetOf: string;
   /** Heading above the per-function note on a separate sheet ("Note"). */
   note: string;
 }

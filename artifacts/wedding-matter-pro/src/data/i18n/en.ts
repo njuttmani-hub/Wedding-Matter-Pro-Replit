@@ -28,8 +28,7 @@ const en: CardStrings = {
     mealFrom: 'from {time} onwards ({meal})',
     dinner: 'dinner',
     lunch: 'lunch',
-    sheetInvite: '{hosts} request the pleasure of your presence at the',
-    sheetOf: 'of',
+    sheetInvite: '{hosts} request the pleasure of your presence at the {function} of {couple}',
     note: 'Note',
   },
 };
