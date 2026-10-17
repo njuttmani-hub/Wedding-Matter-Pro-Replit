@@ -638,6 +638,12 @@ export default function WeddingApp() {
     // are the fonts customers can choose for the printed card itself.
     link.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;0,900;1,400&family=Cormorant+Garamond:wght@400;500;600;700&family=Cinzel:wght@400;700;900&family=Cinzel+Decorative:wght@400;700;900&family=EB+Garamond:ital,wght@0,400;0,600;1,400&family=Marcellus&family=Tangerine:wght@400;700&family=Great+Vibes&family=Italianno&family=Pinyon+Script&family=Allura&family=Tiro+Devanagari+Hindi&family=Noto+Serif+Devanagari:wght@400;700&family=Rozha+One&family=Yatra+One&family=Sahitya:wght@400;700&family=Modak&family=Noto+Serif+Gujarati:wght@400;700&family=Rasa:wght@400;600&family=Hind+Vadodara:wght@400;600&family=Parisienne&family=Petit+Formal+Script&family=Mrs+Saint+Delafield&family=Alex+Brush&family=Sacramento&family=Dancing+Script:wght@400;700&family=Yellowtail&family=Herr+Von+Muellerhoff&family=Monsieur+La+Doulaise&family=Ephesis&family=Meddon&family=Cormorant+SC:wght@400;600;700&family=Forum&family=Italiana&family=Prata&family=Bodoni+Moda:wght@400;700&family=Gilda+Display&family=Bellefair&family=Lora:wght@400;600;700&family=Crimson+Text:wght@400;600;700&family=Libre+Baskerville:wght@400;700&family=Vollkorn:wght@400;600;700&family=Neuton:wght@300;400;700&family=Domine:wght@400;700&family=Cardo:wght@400;700&family=Spectral:wght@400;600;700&family=Baloo+Bhai+2:wght@400;600;700&family=Mukta:wght@400;600;700&family=Khand:wght@400;600;700&family=Kalam:wght@400;700&family=Martel:wght@400;700&family=Halant:wght@400;600;700&family=Amita:wght@400;700&family=Anek+Devanagari:wght@400;600;700&family=Anek+Gujarati:wght@400;600;700&family=Tiro+Devanagari+Marathi&family=Eczar:wght@400;600;700&family=Laila:wght@400;600;700&family=Mukta+Vaani:wght@400;600;700&family=Shrikhand&family=Kumar+One&family=Farsan&family=Noto+Serif+Gurmukhi:wght@400;600;700&family=Tiro+Gurmukhi&family=Mukta+Mahee:wght@400;600;700&family=Baloo+Paaji+2:wght@400;600;700&family=Anek+Gurmukhi:wght@400;600;700&family=Noto+Sans+Gurmukhi:wght@400;600;700&family=Noto+Serif+Bengali:wght@400;600;700&family=Tiro+Bangla&family=Hind+Siliguri:wght@400;600;700&family=Baloo+Da+2:wght@400;600;700&family=Galada&family=Atma:wght@400;600;700&family=Anek+Bangla:wght@400;600;700&family=Mina:wght@400;700&family=Noto+Serif+Tamil:wght@400;600;700&family=Tiro+Tamil&family=Catamaran:wght@400;600;700&family=Baloo+Thambi+2:wght@400;600;700&family=Arima:wght@400;600;700&family=Hind+Madurai:wght@400;600;700&family=Anek+Tamil:wght@400;600;700&family=Mukta+Malar:wght@400;600;700&family=Noto+Serif+Telugu:wght@400;600;700&family=Tiro+Telugu&family=Sree+Krushnadevaraya&family=Suranna&family=Ramabhadra&family=Gidugu&family=Mallanna&family=Baloo+Tammudu+2:wght@400;600;700&family=Anek+Telugu:wght@400;600;700&family=Hind+Guntur:wght@400;600;700&family=Noto+Serif+Kannada:wght@400;600;700&family=Tiro+Kannada&family=Hubballi&family=Baloo+Tamma+2:wght@400;600;700&family=Anek+Kannada:wght@400;600;700&family=Noto+Sans+Kannada:wght@400;600;700&family=Noto+Serif+Malayalam:wght@400;600;700&family=Manjari:wght@400;700&family=Gayathri:wght@400;700&family=Chilanka&family=Baloo+Chettan+2:wght@400;600;700&family=Anek+Malayalam:wght@400;600;700&display=swap';
     document.head.appendChild(link);
+    // The deity symbols that aren't emoji — see DeityGlyph. `text=` makes
+    // Google send only these few glyphs, a few KB instead of a whole CJK font.
+    const symbols = document.createElement('link');
+    symbols.rel = 'stylesheet';
+    symbols.href = `https://fonts.googleapis.com/css2?family=Noto+Sans+Symbols&family=Noto+Serif+SC&family=Noto+Serif+Devanagari&text=${encodeURIComponent(TEXT_GLYPHS.join(''))}`;
+    document.head.appendChild(symbols);
   }, []);
 
   return (
@@ -664,6 +670,10 @@ export default function WeddingApp() {
             </motion.div>
           )}
         </AnimatePresence>
+        {/* Twemoji (deity icons) is CC-BY 4.0, which asks for a visible credit. */}
+        <footer className="mt-16 text-center text-[10px]" style={{ color: c.subtext, opacity: 0.7 }}>
+          Deity icons: <a href="https://github.com/jdecked/twemoji" target="_blank" rel="noopener noreferrer" className="underline">Twemoji</a>, CC-BY 4.0
+        </footer>
       </main>
     </div>
   );
@@ -2524,7 +2534,7 @@ function StepDeities({ form, setForm, c }: { form: FormState; setForm: React.Dis
                     aria-label={`Remove ${d.name}`} title={`Remove ${d.name}`}
                     className="relative w-11 h-11 rounded-xl flex items-center justify-center text-xl focus-visible:outline-2 focus-visible:outline-offset-2"
                     style={{ background: `${c.gold}1A`, border: `1px solid ${c.gold}59`, outlineColor: c.gold }}>
-                    <span aria-hidden="true">{d.glyph}</span>
+                    <span aria-hidden="true"><DeityGlyph glyph={d.glyph} /></span>
                     <span className="absolute -top-1.5 -left-1.5 w-[18px] h-[18px] rounded-full text-[9px] font-bold flex items-center justify-center tabular-nums"
                       style={{ background: c.gold, color: c.onAccent }}>{i + 1}</span>
                     <span className="absolute -top-1.5 -right-1.5 w-[18px] h-[18px] rounded-full flex items-center justify-center"
@@ -2559,7 +2569,7 @@ function StepDeities({ form, setForm, c }: { form: FormState; setForm: React.Dis
                 boxShadow: active ? `0 12px 26px -18px ${c.goldDeep}` : 'none',
                 outlineColor: c.gold,
               }}>
-              <span className="text-[26px] leading-none" aria-hidden="true">{d.glyph}</span>
+              <span className="text-[26px] leading-none" aria-hidden="true"><DeityGlyph glyph={d.glyph} /></span>
               <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-center leading-tight" style={{ color: active ? c.goldDeep : c.subtext }}>{d.name}</span>
               {active && (
                 <motion.span initial={{ scale: 0.4, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: 0.25, ease: 'easeOut' }}
@@ -3669,7 +3679,7 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
       {form.deities.length > 0 && (
         <div className="mb-2 flex items-center justify-center gap-3 flex-wrap"
           style={{ color: '#1A1A1A', fontFamily: form.design.headingFont }}>
-          {form.deities.map(id => { const d = DEITIES.find(x => x.id === id); return <span key={id} className="text-xl sm:text-2xl leading-none" title={d?.name}>{d?.glyph}</span>; })}
+          {form.deities.map(id => { const d = DEITIES.find(x => x.id === id); return <span key={id} className="text-xl sm:text-2xl leading-none">{d && <DeityGlyph glyph={d.glyph} title={d.name} />}</span>; })}
         </div>
       )}
       {form.deities[0] && (
@@ -3706,11 +3716,14 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
           <div className="text-[10px] opacity-55 mt-0.5">{pair(pName(aboveSide, 'grandfather'), pName(aboveSide, 'grandmother'))}</div>
         )}
 
-        <div className="my-4 relative">
-          <div style={{ fontFamily: form.design.scriptFont || "'Tangerine', cursive", fontSize: compact ? '2.2em' : '3.2em', color: '#1A1A1A', lineHeight: latin ? 0.9 : 1.25 }}>
+        <div className="mt-4 mb-1">
+          <div style={{ fontFamily: form.design.scriptFont || "'Tangerine', cursive", fontSize: compact ? '2.2em' : '3.2em', color: '#1A1A1A', lineHeight: 'normal' }}>
             {relation}
           </div>
-          <div className="absolute left-1/2 -translate-x-1/2 -bottom-1 w-14 h-px" style={{ background: '#C0892E' }} />
+          {/* Line height "normal", and the rule in flow below the word: html2canvas
+              places script text lower than the browser whenever line-height is
+              tighter than the font's own height, which struck the rule through "Weds" in the PDF. */}
+          <div className="mx-auto mt-1 w-14 h-px" style={{ background: '#C0892E' }} />
         </div>
 
         <div className="font-medium leading-tight mb-1 mt-2" style={{ fontFamily: form.design.headingFont, fontSize: compact ? '1.7em' : '2.5em', color: '#111111' }}>
@@ -3812,7 +3825,7 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
     ) : null;
     const heading = (<>
       <FunctionMotif preset={f.preset} color={tint} size={compact ? 88 : 116} />
-      <div className="font-medium leading-tight mt-3" style={{ fontFamily: form.design.headingFont, fontSize: compact ? '2.1em' : '2.7em', color: '#111111' }}>
+      <div className="font-medium leading-snug mt-3 pb-2" style={{ fontFamily: form.design.headingFont, fontSize: compact ? '2.1em' : '2.7em', color: '#111111' }}>
         {sheetFunctionName(form, f)}
       </div>
       <SheetRule color={tint} />
@@ -4016,6 +4029,38 @@ function FittedSheet({ size, background, decor, children }: { size: CardSize; ba
         </motion.div>
       </div>
     </div>
+  );
+}
+
+/* ─── Deity glyphs ───────────────────────────────────────────────────────────
+   Deity icons are drawn from one fixed set rather than the device's emoji
+   font. Device emoji vary: the flute 🪈 (2022) and lotus 🪷 (2021) are blank
+   on older phones and Windows, and whatever the device draws is what goes
+   into the PDF. The Twemoji SVGs in assets/deities/ (CC-BY 4.0, credited in
+   the page footer) are bundled and set as INLINE svg: html2canvas would not
+   draw them as <img> from a CDN, even with CORS, but exports inline svg fine
+   (as it does the function motifs). The three that are text symbols, not
+   emoji (or whose Twemoji art is a purple tile: ✝ ☪), use Google fonts that
+   really contain them (checked glyph by glyph):
+   ॐ Noto Serif Devanagari, ☬ ✝ ☪ Noto Sans Symbols, 卐 Noto Serif SC, loaded as
+   a few-glyph subset in WeddingApp's font effect. */
+const DEITY_SVGS = Object.fromEntries(
+  Object.entries(import.meta.glob('./assets/deities/*.svg', { query: '?raw', import: 'default', eager: true }) as Record<string, string>)
+    // Twemoji files carry only a viewBox; without a size an inline svg is 300×150.
+    .map(([path, svg]) => [path.split('/').pop()!.replace('.svg', ''), svg.replace('<svg ', '<svg width="100%" height="100%" ')]),
+) as Record<string, string>;
+const TEXT_GLYPHS = ['ॐ', '☬', '卐', '✝', '☪'];
+const SYMBOL_FONTS = "'Noto Serif Devanagari', 'Noto Sans Symbols', 'Noto Serif SC', serif";
+
+function DeityGlyph({ glyph, title }: { glyph: string; title?: string }) {
+  const file = [...glyph].map(ch => ch.codePointAt(0)!.toString(16)).filter(cp => cp !== 'fe0f').join('-');
+  const svg = DEITY_SVGS[file];
+  if (!svg) {
+    return <span title={title} style={{ fontFamily: SYMBOL_FONTS, lineHeight: 1 }}>{glyph}</span>;
+  }
+  return (
+    <span role="img" aria-label={title || glyph} title={title} dangerouslySetInnerHTML={{ __html: svg }}
+      style={{ width: '1em', height: '1em', display: 'inline-block', verticalAlign: '-0.12em' }} />
   );
 }
 
@@ -4338,7 +4383,10 @@ function openMailDraft(subject: string, body: string, fallback: string) {
 interface CardCanvas { canvas: HTMLCanvasElement; widthIn: number; heightIn: number }
 
 async function cardCanvases(root: HTMLElement): Promise<CardCanvas[]> {
-  const { default: html2canvas } = await import('html2canvas');
+  // html2canvas-pro, not html2canvas: the original draws fonts with built-in
+  // line spacing (Tangerine, Great Vibes, Cormorant) ~0.4em too low, which put
+  // the rule under "Weds" through the middle of the word in every PDF.
+  const { default: html2canvas } = await import('html2canvas-pro');
   // Each rendered card page carries .wmp-card-page. Selecting on that rather
   // than root.children matters: the ref wraps CardPreview, whose own root is a
   // single spacing container, so children[] is one element holding both pages.
@@ -4381,6 +4429,10 @@ async function cardCanvases(root: HTMLElement): Promise<CardCanvas[]> {
   }
   return out;
 }
+
+// Lets a headless check drive the real export path (the buttons only exist
+// after submitting an order). Dev server only; production builds drop it.
+if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__wmpCardCanvases = cardCanvases;
 
 async function cardPngFiles(pages: CardCanvas[], base: string): Promise<File[]> {
   const files: File[] = [];
