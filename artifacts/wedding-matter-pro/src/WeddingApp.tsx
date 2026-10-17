@@ -17,6 +17,7 @@ import {
 } from './data/constants';
 import { fetchOrders, insertOrder, updateOrderStatus, deleteOrder as deleteOrderRow, subscribeToOrders } from './lib/orders';
 import { getSession, onAuthChange, signIn, signOut } from './lib/auth';
+import { cardStrings, scriptText, cardDate, cardTime } from './lib/cardText';
 
 /* ─── Storage keys ───────────────────────────────────────────────────────── */
 const DRAFT_KEY = 'wmp_draft_v3';
@@ -352,6 +353,79 @@ function progWhen(f: Programme, long = false): { date: string; time: string } {
   return { date, time };
 }
 
+/* ─── Separate function sheets: wording ──────────────────────────────────────
+   Everything a per-function sheet prints, in the card's language. Shared by
+   the sheet in CardPreview and the CorelDRAW export so the two never drift. */
+
+/** The function's printed name: the card language's preset name unless the
+ *  customer renamed it, in which case their own wording (in script if given). */
+function sheetFunctionName(form: FormState, f: Programme): string {
+  const preset = PROGRAMME_PRESETS.find(p => p.id === f.preset);
+  const typed = f.name.trim();
+  if (typed && typed !== preset?.name) return scriptText(form, `programme.${f.id}.name`, typed);
+  return cardStrings(form).programmes[f.preset] ?? (typed || preset?.name || '');
+}
+
+/** The couple in card order (aboveWeds first), in the card's script. */
+function sheetCouple(form: FormState): [string, string] {
+  const [a, b] = form.aboveWeds === 'bride' ? ['bride', 'groom'] as const : ['groom', 'bride'] as const;
+  return [scriptText(form, `${a}.name`, form[a].name.trim()), scriptText(form, `${b}.name`, form[b].name.trim())];
+}
+
+/** The host parents exactly as page 1's host line builds them — a mother and
+ *  a father, each taken from the above-weds side first — or '' when the card
+ *  isn't hosted by parents. */
+function sheetHosts(form: FormState): string {
+  if (form.hostType !== 'parents') return '';
+  const S = cardStrings(form);
+  const [a, b] = form.aboveWeds === 'bride' ? ['bride', 'groom'] as const : ['groom', 'bride'] as const;
+  const person = (side: 'bride' | 'groom', who: 'mother' | 'father') => {
+    const name = form[side][`${who}Name`].trim();
+    if (!name) return '';
+    const prefix = form[side][`${who}Prefix`].trim();
+    const n = scriptText(form, `${side}.${who}Name`, name);
+    return prefix ? `${S.salutations[prefix] ?? prefix} ${n}` : n;
+  };
+  const mother = person(a, 'mother') || person(b, 'mother');
+  const father = person(a, 'father') || person(b, 'father');
+  return [mother, father].filter(Boolean).join(S.labels.and);
+}
+
+/** The invitation sentence split around {couple}, so the sheet can set the
+ *  names large in the middle of it. `hasCouple` is false when a translation
+ *  left the placeholder out; the names then follow the sentence. */
+function sheetInviteParts(form: FormState, f: Programme): { before: string; after: string; hasCouple: boolean } {
+  const L = cardStrings(form).labels;
+  const hosts = sheetHosts(form);
+  let s = L.sheetInvite.replace('{function}', sheetFunctionName(form, f));
+  s = hosts ? s.replace('{hosts}', hosts) : s.replace(/\s*\{hosts\}\s*/, ' ');
+  const i = s.indexOf('{couple}');
+  const tidy = (t: string) => t.replace(/\s+/g, ' ').trim();
+  const before = tidy(i < 0 ? s : s.slice(0, i));
+  const after = tidy(i < 0 ? '' : s.slice(i + '{couple}'.length));
+  // With no hosts the English starts "request the…"; a sentence still starts with a capital.
+  return { before: before.charAt(0).toUpperCase() + before.slice(1), after, hasCouple: i >= 0 };
+}
+
+/** The whole invitation sentence as one line, for the export. */
+function sheetInviteText(form: FormState, f: Programme): string {
+  const { before, after } = sheetInviteParts(form, f);
+  const couple = sheetCouple(form).filter(Boolean).join(cardStrings(form).labels.and);
+  return [before, couple, after].filter(Boolean).join(' ').replace(/\s+([.,।])/g, '$1');
+}
+
+/** A sheet's date, time (with a reception's meal) and note in the card's language. */
+function sheetWhen(form: FormState, f: Programme): { date: string; time: string; note: string } {
+  const L = cardStrings(form).labels;
+  const t = cardTime(form, f.hour, f.minute, f.ampm);
+  const meal = f.preset === 'reception' && t && (f.mealType === 'dinner' || f.mealType === 'lunch');
+  return {
+    date: cardDate(form, f.date, true),
+    time: meal ? L.mealFrom.replace('{time}', t).replace('{meal}', L[f.mealType as 'dinner' | 'lunch']) : t,
+    note: f.note?.trim() ? scriptText(form, `programme.${f.id}.note`, f.note.trim()) : '',
+  };
+}
+
 /* ─── Card size ──────────────────────────────────────────────────────────── */
 const CM_PER_IN = 2.54;
 // Smaller than 3" and the matter can't be set legibly at any scale; larger
@@ -425,7 +499,20 @@ function generateCorelText(form: FormState): string {
     // preview labels its pages: the invitation is sheet 1.
     const dated = form.programmes.filter(f => f.date);
     s += `─── PROGRAMMES · SEPARATE SHEETS ───\nSheet 1 is the invitation. Each function below gets its own sheet (${dated.length + 1} sheets in all).\n`;
-    dated.forEach((f, i) => { s += progBlock(f, `═══ SHEET ${i + 2} — ${f.name} ═══`); });
+    // Each sheet's own extras, in the order the sheet prints them. The base
+    // block stays as the combined list's so the two layouts read alike.
+    dated.forEach((f, i) => {
+      const when = sheetWhen(form, f);
+      const couple = sheetCouple(form).filter(Boolean).join(cardStrings(form).labels.and);
+      s += progBlock(f, `═══ SHEET ${i + 2} — ${f.name} ═══`);
+      s += `  Artwork: ${PROGRAMME_PRESETS.find(p => p.id === f.preset)?.name || 'Function'} motif (${PROGRAMME_PRESETS.find(p => p.id === f.preset)?.color || '#C0892E'})\n`;
+      s += `  Heading: ${sheetFunctionName(form, f)}\n`;
+      s += `  Invitation: ${sheetInviteText(form, f)}\n`;
+      if (couple) s += `  Couple: ${couple}\n`;
+      s += `  Printed date: ${when.date}\n`;
+      if (when.time) s += `  Printed time: ${when.time}\n`;
+      if (when.note) s += `  Note: ${when.note}\n`;
+    });
     const undated = form.programmes.filter(f => !f.date);
     if (undated.length) s += `\nNo date, so not on any sheet: ${undated.map(f => f.name).join(', ')}\n`;
   } else {
@@ -2558,6 +2645,10 @@ function StepProgrammes({ form, setForm, c }: { form: FormState; setForm: React.
                           <Field label="Full Address" c={c}>
                             <Textarea c={c} rows={2} value={f.address} onChange={e => updateProg(f.id, 'address', e.target.value)} placeholder="Street, City, PIN Code" />
                           </Field>
+                          <Field label="Note on this function's page" hint="optional · prints only with a separate page per function" c={c}>
+                            <Textarea c={c} rows={2} value={f.note || ''} onChange={e => updateProg(f.id, 'note', e.target.value)}
+                              placeholder="Dress code: yellow · Lunch to follow · RSVP: Rajesh 98xxxxxx" />
+                          </Field>
 
                           <div className="flex justify-end pt-1">
                             {confirmId === f.id ? (
@@ -3362,24 +3453,77 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
   // One standalone insert per programme, laid out as its own composition rather
   // than reusing the combined page's small row. No height of its own: the
   // FittedSheet in paper() centres it on the sheet and scales it up to fill.
+  // Every fixed word comes from cardStrings and every typed value goes through
+  // scriptText, so the sheet prints in the card's language.
   const programmeSheet = (f: Programme) => {
     const preset = PROGRAMME_PRESETS.find(p => p.id === f.preset);
-    const when = progWhen(f, true);
+    const tint = preset?.color || '#C0892E';
+    const L = cardStrings(form).labels;
+    const when = sheetWhen(form, f);
+    const invite = sheetInviteParts(form, f);
+    const [aboveName, belowName] = sheetCouple(form);
+    const venue = f.venue.trim() ? scriptText(form, `programme.${f.id}.venue`, f.venue.trim()) : '';
+    const address = f.address.trim() ? scriptText(form, `programme.${f.id}.address`, f.address.trim()) : '';
+    const sentence = { fontSize: '0.95em', color: '#2A2A2A', lineHeight: 1.55 };
+    const couple = (aboveName || belowName) ? (
+      <div className="my-3" style={{ color: '#111111' }}>
+        {aboveName && <div className="font-medium leading-tight" style={{ fontFamily: form.design.headingFont, fontSize: '2em' }}>{aboveName}</div>}
+        {aboveName && belowName && (
+          <div style={{ fontFamily: form.design.scriptFont || "'Tangerine', cursive", fontSize: '2em', color: tint, lineHeight: 1 }}>{L.and.trim()}</div>
+        )}
+        {belowName && <div className="font-medium leading-tight" style={{ fontFamily: form.design.headingFont, fontSize: '2em' }}>{belowName}</div>}
+      </div>
+    ) : null;
+    const heading = (<>
+      <FunctionMotif preset={f.preset} color={tint} size={compact ? 88 : 116} />
+      <div className="font-medium leading-tight mt-3" style={{ fontFamily: form.design.headingFont, fontSize: compact ? '2.1em' : '2.7em', color: '#111111' }}>
+        {sheetFunctionName(form, f)}
+      </div>
+      <SheetRule color={tint} />
+      {invite.before && <p className="italic max-w-[22em] mx-auto" style={sentence}>{invite.before}</p>}
+      {invite.hasCouple && couple}
+      {invite.after && <p className="italic max-w-[22em] mx-auto" style={sentence}>{invite.after}</p>}
+      {!invite.hasCouple && couple}
+    </>);
+    const details = (<>
+      <div className="font-semibold uppercase" style={{ color: '#1A1A1A', letterSpacing: '0.12em', fontSize: '0.9em' }}>{when.date}</div>
+      {when.time && <div className="mt-1" style={{ fontSize: '0.92em', color: '#3A3A3A' }}>{when.time}</div>}
+      {venue && <div className="mt-4 font-bold" style={{ fontFamily: form.design.headingFont, fontSize: '1.2em', color: '#1A1A1A' }}>{venue}</div>}
+      {address && <div className="mt-0.5 max-w-[20em] whitespace-pre-line" style={{ fontSize: '0.85em', color: '#4A4A4A' }}>{address}</div>}
+      {when.note && (
+        <div className="mt-5 px-5 py-2.5 max-w-[22em] rounded-lg" style={{ border: `1px solid ${tint}55`, background: `${tint}0D` }}>
+          <div className="font-bold uppercase mb-0.5" style={{ fontSize: '0.62em', letterSpacing: '0.3em', color: tint }}>{L.note}</div>
+          <div className="whitespace-pre-line" style={{ fontSize: '0.88em', color: '#1A1A1A' }}>{when.note}</div>
+        </div>
+      )}
+    </>);
+    const textStyle = { fontFamily: form.design.bodyFont, fontSize: `${form.design.fontSize}px`, letterSpacing: `${form.design.letterSpacing}px`, lineHeight: form.design.lineHeight };
+    // A landscape card would leave one centred column stranded between empty
+    // sides, so it sets the invitation and the particulars side by side.
+    if (cardSize.widthIn / cardSize.heightIn > 1.2) {
+      return (
+        <div className={`grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-10 text-center ${compact ? 'px-10 py-10' : 'px-16 py-14'}`} style={textStyle}>
+          <div className="flex flex-col items-center min-w-0">{heading}</div>
+          <div className="self-stretch flex flex-col items-center gap-2 py-6" aria-hidden="true">
+            <div className="flex-1 w-px" style={{ background: `linear-gradient(transparent, ${tint}88)` }} />
+            <svg width="9" height="9" viewBox="0 0 10 10"><path d="M5 0 L10 5 L5 10 L0 5 Z" fill={tint} /></svg>
+            <div className="flex-1 w-px" style={{ background: `linear-gradient(${tint}88, transparent)` }} />
+          </div>
+          <div className="flex flex-col items-center min-w-0">
+            <DecorativeDivider compact={compact} mini />
+            {details}
+            <div className="mt-5"><SheetRule color={tint} small /></div>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="relative">
-        <div className={`flex flex-col items-center justify-center text-center ${compact ? 'px-6 py-10' : 'px-8 sm:px-12 py-14'}`}
-          style={{ fontFamily: form.design.bodyFont, fontSize: `${form.design.fontSize}px`, letterSpacing: `${form.design.letterSpacing}px`, lineHeight: form.design.lineHeight }}>
-          <DecorativeDivider compact={compact} />
-          <div className={`${compact ? 'text-2xl' : 'text-3xl'} mt-4 leading-none`} aria-hidden="true">{preset?.icon || '✨'}</div>
-          <div className="font-medium leading-tight mt-3" style={{ fontFamily: form.design.headingFont, fontSize: compact ? '2em' : '2.8em', color: '#111111' }}>
-            {f.name}
-          </div>
-          <div className="w-14 h-px my-4" style={{ background: '#C0892E' }} />
-          <div className="font-semibold" style={{ color: '#1A1A1A' }}>{when.date}</div>
-          {when.time && <div className="mt-1 opacity-70" style={{ fontSize: '0.92em' }}>{when.time}</div>}
-          {f.venue && <div className="mt-5 font-bold" style={{ fontFamily: form.design.headingFont, fontSize: '1.15em', color: '#1A1A1A' }}>{f.venue}</div>}
-          {f.address && <div className="mt-1 opacity-65 max-w-xs whitespace-pre-line" style={{ fontSize: '0.85em' }}>{f.address}</div>}
-          <div className="mt-6"><DecorativeDivider compact={compact} mini /></div>
+        <div className={`flex flex-col items-center justify-center text-center ${compact ? 'px-8 py-10' : 'px-12 sm:px-14 py-14'}`} style={textStyle}>
+          {heading}
+          <div className="mt-3 mb-1"><DecorativeDivider compact={compact} mini /></div>
+          {details}
+          <div className="mt-5"><SheetRule color={tint} small /></div>
         </div>
       </div>
     );
@@ -3389,7 +3533,9 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
   //    `wmp-hero-card` carries the theme-aware shadow ladder + gold ring;
   //    `wmp-card-page` makes each page print whole on its own sheet, and is
   //    how the exports find the pages. FittedSheet sizes it to the card. ───
-  const paper = (children: React.ReactNode, label: string, showLabel: boolean) => (
+  //    `extraDecor` sits on the sheet itself (not the scaled matter), for
+  //    ornaments that belong to the paper's edges — the function sheets' corners.
+  const paper = (children: React.ReactNode, label: string, showLabel: boolean, extraDecor?: React.ReactNode) => (
     <div>
       {showLabel && (
         <div className="flex items-center gap-2 mb-2 px-0.5">
@@ -3408,6 +3554,7 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
             </>
           )}
           {layout === 'modern' && <div className="absolute inset-3 rounded-xl pointer-events-none" style={{ border: '1px solid #C0892E', opacity: 0.4 }} />}
+          {extraDecor}
         </>
       }>
         {children}
@@ -3425,7 +3572,8 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
           changes length as programmes are dated or removed. */}
       {separate && datedProgrammes.map((f, i) => (
         <React.Fragment key={f.id}>
-          {paper(programmeSheet(f), `Page ${i + 2} · ${f.name || PROGRAMME_PRESETS.find(p => p.id === f.preset)?.name || 'Function'}`, true)}
+          {paper(programmeSheet(f), `Page ${i + 2} · ${f.name || PROGRAMME_PRESETS.find(p => p.id === f.preset)?.name || 'Function'}`, true,
+            <SheetOrnament color={PROGRAMME_PRESETS.find(p => p.id === f.preset)?.color || '#C0892E'} size={cardSize} />)}
         </React.Fragment>
       ))}
     </div>
@@ -3546,6 +3694,283 @@ function DecorativeDivider({ compact, mini }: { compact?: boolean; mini?: boolea
       </svg>
       <span className="w-1 h-1 rounded-full shrink-0" style={{ background: '#C0892E', opacity: 0.55 }} />
       <div className={`h-px ${rule}`} style={{ background: 'linear-gradient(90deg, #C0892E, rgba(192,137,46,0.18) 60%, transparent)' }} />
+    </div>
+  );
+}
+
+/* ─── Function sheet artwork ─────────────────────────────────────────────────
+   Line art for the separate function sheets, drawn in each function's own
+   colour (PROGRAMME_PRESETS[].color). Single-colour strokes with at most a
+   faint tint fill, so they print cleanly and a designer can retrace them.
+   Every motif is drawn on a 120×120 grid. */
+
+/** A flower outline of `n` rounded petals around (cx, cy) — the marigolds. */
+function scallopPath(cx: number, cy: number, r: number, n: number): string {
+  const pt = (a: number, rr: number) => `${(cx + rr * Math.cos(a)).toFixed(2)} ${(cy + rr * Math.sin(a)).toFixed(2)}`;
+  let d = `M${pt(0, r)}`;
+  for (let i = 0; i < n; i++) {
+    const a1 = (i * 2 * Math.PI) / n, a2 = ((i + 1) * 2 * Math.PI) / n;
+    d += ` Q${pt((a1 + a2) / 2, r * 1.45)} ${pt(a2, r)}`;
+  }
+  return d + ' Z';
+}
+
+/** A pointed leaf of length `len` from (0,0) along +x, with its midrib. */
+const leaf = (len: number) => `M0 0 C${len * 0.3} ${-len * 0.22} ${len * 0.72} ${-len * 0.22} ${len} 0 C${len * 0.72} ${len * 0.22} ${len * 0.3} ${len * 0.22} 0 0 Z M2 0 H${len * 0.88}`;
+
+function MotifArt({ preset, color }: { preset: string; color: string }) {
+  const tint = { fill: color, fillOpacity: 0.13 };
+  const solid = { fill: color, stroke: 'none' };
+  const dots = { strokeDasharray: '0 5.5', strokeWidth: 2.6 };
+  const thin = { strokeWidth: 1.3 };
+  switch (preset) {
+    case 'wedding':   // a mandap over the sacred fire
+      return (<>
+        <path d="M24 48 Q26 26 60 15 Q94 26 96 48 Z" {...tint} />
+        <path d="M36 44 Q40 32 60 25 Q80 32 84 44" {...thin} />
+        <path d="M60 15 V9" /><circle cx="60" cy="6.5" r="2.4" {...solid} />
+        <path d="M21 48 H99" />
+        <path d="M36 52 q4 6 8 0 q4 6 8 0 q4 6 8 0 q4 6 8 0 q4 6 8 0 q4 6 8 0" {...thin} />
+        <path d="M44 57 V63 M60 58 V66 M76 57 V63" {...thin} />
+        <circle cx="44" cy="65" r="1.6" {...solid} /><circle cx="60" cy="68" r="1.8" {...solid} /><circle cx="76" cy="65" r="1.6" {...solid} />
+        <path d="M27 52 H39 M81 52 H93" />
+        <path d="M30 52 V100 M36 52 V100 M84 52 V100 M90 52 V100" />
+        <path d="M27 100 H39 M81 100 H93" />
+        <path d="M60 92 C52 86 54 78 60 70 C66 78 68 86 60 92 Z" {...tint} />
+        <path d="M60 89 C57.5 86 58 82 60 78 C62 82 62.5 86 60 89 Z" {...solid} />
+        <path d="M49 100 L53 93 H67 L71 100" />
+        <path d="M18 100 H102" /><path d="M12 106 H108" />
+      </>);
+    case 'reception':   // a chandelier with a beaded swag
+      return (<>
+        <path d="M60 3 V20" /><circle cx="60" cy="24" r="4" /><path d="M60 28 V38" />
+        <path d="M44 42 H76 L69 54 H51 Z" {...tint} />
+        <path d="M51 52 C38 62 22 60 20 46" /><path d="M69 52 C82 62 98 60 100 46" />
+        <path d="M54 54 C47 70 36 70 36 60" /><path d="M66 54 C73 70 84 70 84 60" />
+        {[20, 100, 36, 84].map((x, i) => {
+          const y = i < 2 ? 46 : 60;
+          return (<g key={x}>
+            <path d={`M${x - 5} ${y} H${x + 5} L${x + 3} ${y + 3} H${x - 3} Z`} {...tint} />
+            <path d={`M${x - 1.8} ${y} V${y - 9} H${x + 1.8} V${y}`} {...thin} />
+            <path d={`M${x} ${y - 11} C${x - 3} ${y - 14} ${x - 1} ${y - 18} ${x} ${y - 20} C${x + 1} ${y - 18} ${x + 3} ${y - 14} ${x} ${y - 11} Z`} {...solid} />
+          </g>);
+        })}
+        <path d="M24 52 Q42 80 60 74 Q78 80 96 52" {...dots} />
+        <path d="M60 54 V72" /><path d="M60 72 L65 80 L60 90 L55 80 Z" {...tint} />
+        <path d="M47 60 V68 M73 60 V68" {...thin} />
+        <circle cx="47" cy="70.5" r="2" {...solid} /><circle cx="73" cy="70.5" r="2" {...solid} />
+        <path d="M60 96 V100" {...thin} /><circle cx="60" cy="103" r="2" {...solid} />
+      </>);
+    case 'mehendi': {   // a paisley in a ring of dots, on vines
+      const paisley = 'M58 104 C34 104 24 84 30 66 C36 48 58 42 66 28 C70 20 69 13 64 8 C84 16 94 38 92 62 C90 88 76 104 58 104 Z';
+      return (<>
+        <path d={paisley} {...tint} />
+        <path d={paisley} transform="translate(60 66) scale(1.16) translate(-60 -64)" {...dots} />
+        <path d={paisley} transform="translate(61 76) scale(0.58) translate(-60 -64)" {...thin} />
+        <circle cx="60" cy="80" r="5" /><circle cx="60" cy="80" r="1.8" {...solid} />
+        <path d="M54 62 Q60 54 70 52 M52 70 Q56 66 62 64" {...thin} />
+        <path d="M26 112 C18 104 14 96 14 84" /><path d="M94 112 C102 104 106 96 106 84" />
+        {[[14, 84, -80], [16, 98, -140], [22, 106, 170], [106, 84, -100], [104, 98, -40], [98, 106, 10]].map(([x, y, r]) => (
+          <path key={`${x}-${y}`} d={leaf(13)} transform={`translate(${x} ${y}) rotate(${r})`} {...tint} />
+        ))}
+      </>);
+    }
+    case 'haldi':   // a turmeric pot crowned with marigolds
+      return (<>
+        {[[-118, 40, 44], [-62, 80, 44]].map(([r, x, y]) => <path key={x} d={leaf(18)} transform={`translate(${x} ${y}) rotate(${r})`} {...tint} />)}
+        {[[44, 40, 9.5], [76, 40, 9.5], [60, 28, 11]].map(([x, y, r]) => (
+          <g key={`${x}-${y}`}>
+            <path d={scallopPath(x, y, r, 11)} fill="#FFFFFF" />
+            <path d={scallopPath(x, y, r, 11)} {...tint} />
+            <path d={scallopPath(x, y, r * 0.58, 8)} {...thin} />
+            <circle cx={x} cy={y} r={r * 0.22} {...solid} />
+          </g>
+        ))}
+        <path d="M36 68 C20 78 22 104 42 110 H78 C98 104 100 78 84 68 Z" {...tint} />
+        <path d="M42 68 C44 63 44 61 40 57 H80 C76 61 76 63 78 68" fill="#FFFFFF" />
+        <path d="M35 57 H85" />
+        <path d="M28 86 Q44 93 60 86 Q76 79 92 86" {...thin} />
+        <path d="M30 96 H90" {...dots} />
+      </>);
+    case 'ladiessangeet':   // a dholak with notes rising
+      return (<>
+        <path d="M26 54 Q60 44 94 54 V88 Q60 98 26 88 Z" {...tint} />
+        <path d="M26 54 Q60 44 94 54 M26 88 Q60 98 94 88" />
+        <ellipse cx="26" cy="71" rx="6" ry="17" fill="#FFFFFF" /><ellipse cx="94" cy="71" rx="6" ry="17" fill="#FFFFFF" />
+        <ellipse cx="94" cy="71" rx="2.5" ry="9" {...thin} />
+        <path d="M44 49.5 Q46.5 71 44 92.5 M76 49.5 Q78.5 71 76 92.5" />
+        <path d="M30 56 L44 86 M44 56 L30 86 M76 56 L90 86 M90 56 L76 86" {...thin} />
+        <path d="M48 52 L60 90 L72 52" {...thin} />
+        <ellipse cx="42" cy="34" rx="5" ry="3.6" transform="rotate(-22 42 34)" {...solid} />
+        <ellipse cx="62" cy="28" rx="5" ry="3.6" transform="rotate(-22 62 28)" {...solid} />
+        <path d="M46.5 32.5 V12 L66.5 6 V26.5" /><path d="M46.5 17 L66.5 11" />
+        <ellipse cx="86" cy="36" rx="4.5" ry="3.2" transform="rotate(-22 86 36)" {...solid} />
+        <path d="M90 34.5 V18 Q96 22 98 28" />
+      </>);
+    case 'engagement':
+    case 'ring':   // two linked rings, one set with a stone
+      return (<>
+        <circle cx="47" cy="74" r="25" strokeWidth="3" /><circle cx="47" cy="74" r="20.5" {...thin} />
+        <circle cx="73" cy="74" r="25" strokeWidth="3" /><circle cx="73" cy="74" r="20.5" {...thin} />
+        <path d="M65 44 L69.5 37 H76.5 L81 44 L73 54 Z" fill="#FFFFFF" />
+        <path d="M65 44 L69.5 37 H76.5 L81 44 L73 54 Z" {...tint} />
+        <path d="M65 44 H81 M69.5 37 L73 44 L76.5 37 M73 44 V54" {...thin} />
+        <path d="M73 25 V30 M60 32 L63.5 35.5 M86 32 L82.5 35.5" {...thin} />
+        <path d="M26 30 L28 36 L34 38 L28 40 L26 46 L24 40 L18 38 L24 36 Z" {...solid} />
+        <path d="M98 94 L99.3 98 L103 99.3 L99.3 100.6 L98 104.6 L96.7 100.6 L93 99.3 L96.7 98 Z" {...solid} />
+      </>);
+    case 'thread':   // the sacred thread: a three-strand loop and its knot
+      return (<>
+        <ellipse cx="60" cy="60" rx="44" ry="20" transform="rotate(-38 60 60)" />
+        <ellipse cx="60" cy="60" rx="40" ry="16" transform="rotate(-38 60 60)" strokeDasharray="7 4" {...thin} />
+        <ellipse cx="60" cy="60" rx="36" ry="12" transform="rotate(-38 60 60)" />
+        <circle cx="86" cy="83" r="7" fill="#FFFFFF" /><circle cx="86" cy="83" r="7" {...tint} />
+        <path d="M80 80 C84 74 92 76 90 83 C88 90 80 90 82 84 C83 80 88 81 87 85" {...thin} />
+        <path d="M89 89 C92 96 90 102 86 106 M84 90 C84 97 80 101 76 103" />
+        <circle cx="30" cy="28" r="3.2" {...solid} /><circle cx="22" cy="40" r="2" {...solid} /><circle cx="40" cy="20" r="2" {...solid} />
+      </>);
+    case 'garba':   // crossed dandiya sticks under a ring of dancers' dots
+      return (<>
+        <path d="M18 30 Q60 -2 102 30" {...dots} />
+        {[34, -34].map(r => (
+          <g key={r} transform={`rotate(${r} 60 66)`}>
+            <rect x="56.5" y="18" width="7" height="90" rx="3.5" fill="#FFFFFF" />
+            <rect x="56.5" y="18" width="7" height="90" rx="3.5" {...tint} />
+            <path d="M56.5 28 H63.5 M56.5 32 H63.5 M56.5 58 H63.5 M56.5 62 H63.5 M56.5 66 H63.5 M56.5 92 H63.5 M56.5 96 H63.5" {...thin} />
+            <path d="M60 108 L54 118 M60 108 L60 119 M60 108 L66 118" {...thin} />
+            <circle cx="60" cy="108" r="1.8" {...solid} />
+          </g>
+        ))}
+        <circle cx="60" cy="66" r="4" {...solid} />
+      </>);
+    case 'cocktail':   // two flutes raised in a toast
+      return (<>
+        {[[36, 16], [84, -16]].map(([x, r]) => (
+          <g key={x} transform={`translate(${x} 76) rotate(${r})`}>
+            <path d="M-11 -46 C-11 -18 -7 -4 0 -2 C7 -4 11 -18 11 -46 Z" fill="#FFFFFF" />
+            <path d="M-10.6 -32 C-10 -16 -6 -5 0 -3 C6 -5 10 -16 10.6 -32 Z" {...tint} />
+            <path d="M-11 -46 C-11 -18 -7 -4 0 -2 C7 -4 11 -18 11 -46 Z" />
+            <path d="M-10.6 -32 H10.6" {...thin} />
+            <circle cx="-3" cy="-22" r="1.3" {...thin} /><circle cx="3" cy="-14" r="1.1" {...thin} /><circle cx="1" cy="-26" r="0.9" {...thin} />
+            <path d="M0 -2 V30" /><path d="M-11 32 Q0 27 11 32" />
+          </g>
+        ))}
+        <path d="M60 8 V18 M50 14 L54 20 M70 14 L66 20" {...thin} />
+        <path d="M60 22 L61.5 25.5 L65 27 L61.5 28.5 L60 32 L58.5 28.5 L55 27 L58.5 25.5 Z" {...solid} />
+      </>);
+    case 'matakijyot':
+    case 'chowki':   // a diya with its flame and rays
+      return (<>
+        {Array.from({ length: 7 }, (_, i) => {
+          const a = ((-160 + i * (140 / 6)) * Math.PI) / 180;
+          const p = (rr: number) => `${(60 + rr * Math.cos(a)).toFixed(1)} ${(54 + rr * Math.sin(a)).toFixed(1)}`;
+          return <path key={i} d={`M${p(28)} L${p(i % 2 ? 34 : 38)}`} {...thin} />;
+        })}
+        <path d="M60 78 C47 66 52 50 60 33 C68 50 73 66 60 78 Z" {...tint} />
+        <path d="M60 74 C55 68 56 60 60 51 C64 60 65 68 60 74 Z" {...solid} />
+        <path d="M20 80 Q60 70 100 80 Q98 101 60 103 Q22 101 20 80 Z" {...tint} />
+        <path d="M20 80 Q60 90 100 80" {...thin} />
+        <path d="M32 92 Q60 99 88 92" {...dots} />
+        <path d="M48 103 L44 111 H76 L72 103" />
+      </>);
+    case 'satyanarayan':   // a kalash with coconut and mango leaves
+      return (<>
+        {[[-168, 50, 56], [-140, 52, 54], [-12, 70, 56], [-40, 68, 54]].map(([r, x, y]) => (
+          <path key={r} d={leaf(30)} transform={`translate(${x} ${y}) rotate(${r})`} {...tint} />
+        ))}
+        <ellipse cx="60" cy="40" rx="13" ry="16" fill="#FFFFFF" />
+        <ellipse cx="60" cy="40" rx="13" ry="16" {...tint} />
+        <path d="M54 29 Q51 40 54 52 M66 29 Q69 40 66 52" {...thin} />
+        <path d="M60 24 C57 18 63 14 60 9" />
+        <path d="M40 72 C22 82 24 106 44 112 H76 C96 106 98 82 80 72 Z" {...tint} />
+        <path d="M44 72 C46 66 46 64 42 60 H78 C74 64 74 66 76 72" fill="#FFFFFF" />
+        <path d="M37 59 H83" />
+        <path d="M30 86 H90" {...dots} />
+        <circle cx="60" cy="98" r="6" {...thin} /><circle cx="60" cy="98" r="2" {...solid} />
+      </>);
+    case 'pathbhog':   // an open book with a lotus — no sacred symbols drawn
+      return (<>
+        <path d="M60 58 C48 57 37 48 34 35 C46 37 55 45 60 58 Z" {...tint} />
+        <path d="M60 58 C72 57 83 48 86 35 C74 37 65 45 60 58 Z" {...tint} />
+        <path d="M60 58 C45 61 31 56 24 47 C37 45 51 49 60 58 Z" {...tint} />
+        <path d="M60 58 C75 61 89 56 96 47 C83 45 69 49 60 58 Z" {...tint} />
+        <path d="M60 58 C51 48 51 33 60 21 C69 33 69 48 60 58 Z" fill="#FFFFFF" />
+        <path d="M60 58 C51 48 51 33 60 21 C69 33 69 48 60 58 Z" {...tint} />
+        <circle cx="60" cy="13" r="1.8" {...solid} /><circle cx="48" cy="17" r="1.3" {...solid} /><circle cx="72" cy="17" r="1.3" {...solid} />
+        <path d="M60 100 C48 92 32 90 16 94 V64 C32 60 48 62 60 70 Z" fill="#FFFFFF" />
+        <path d="M60 100 C72 92 88 90 104 94 V64 C88 60 72 62 60 70 Z" fill="#FFFFFF" />
+        <path d="M60 100 C48 92 32 90 16 94 V64 C32 60 48 62 60 70 Z M60 100 C72 92 88 90 104 94 V64 C88 60 72 62 60 70 Z M60 70 V100" />
+        <path d="M24 74 C34 71 44 72 52 77 M24 81 C34 78 44 79 52 84 M24 88 C34 85 44 86 52 91 M96 74 C86 71 76 72 68 77 M96 81 C86 78 76 79 68 84 M96 88 C86 85 76 86 68 91" {...thin} />
+        <path d="M12 98 C30 94 48 96 60 106 C72 96 90 94 108 98" />
+      </>);
+    default: {   // custom and anything unknown: an eight-petal rosette
+      return (<>
+        {Array.from({ length: 8 }, (_, i) => (
+          <path key={`l${i}`} d={leaf(16)} transform={`rotate(${i * 45 + 22.5} 60 60) translate(60 60) translate(30 0)`} {...tint} />
+        ))}
+        {Array.from({ length: 8 }, (_, i) => (
+          <path key={i} d="M60 60 C52 50 52 36 60 24 C68 36 68 50 60 60 Z" transform={`rotate(${i * 45} 60 60)`} {...tint} />
+        ))}
+        <circle cx="60" cy="60" r="15" {...dots} />
+        <circle cx="60" cy="60" r="8" fill="#FFFFFF" /><circle cx="60" cy="60" r="8" />
+        <circle cx="60" cy="60" r="3" {...solid} />
+      </>);
+    }
+  }
+}
+
+/** The artwork at the top of a separate function sheet. */
+function FunctionMotif({ preset, color, size }: { preset: string; color: string; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 120 120" fill="none" stroke={color} strokeWidth={2.1}
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="shrink-0 overflow-visible">
+      <MotifArt preset={preset} color={color} />
+    </svg>
+  );
+}
+
+/** A thin rule with a lozenge, in the function's colour. */
+function SheetRule({ color, small }: { color: string; small?: boolean }) {
+  const w = small ? 28 : 44;
+  return (
+    <div className="flex items-center justify-center gap-1.5 my-3" aria-hidden="true">
+      <div className="h-px" style={{ width: w, background: `linear-gradient(90deg, transparent, ${color})` }} />
+      <svg width="9" height="9" viewBox="0 0 10 10"><path d="M5 0 L10 5 L5 10 L0 5 Z" fill={color} /></svg>
+      <div className="h-px" style={{ width: w, background: `linear-gradient(90deg, ${color}, transparent)` }} />
+    </div>
+  );
+}
+
+/** Filigree corners for a function sheet, sitting just inside paper()'s gold
+ *  borders. Sized off the sheet's own short side (it is laid out at real
+ *  size), so a big card gets proportionally bigger corners. */
+function SheetOrnament({ color, size }: { color: string; size: CardSize }) {
+  const s = Math.round(Math.min(110, Math.max(46, Math.min(size.widthIn, size.heightIn) * PX_PER_IN * 0.15)));
+  const corner = (
+    <svg width={s} height={s} viewBox="0 0 100 100" fill="none" stroke={color} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 6 H70 M6 6 V70" strokeWidth="1.6" />
+      <path d="M12 12 H38 M12 12 V38" strokeWidth="0.9" />
+      <path d="M14 48 Q14 14 48 14" strokeWidth="1.1" />
+      <path d="M48 14 C57 14 61 21 56 25 C52 28 48 24 51 21" strokeWidth="1.1" />
+      <path d="M14 48 C14 57 21 61 25 56 C28 52 24 48 21 51" strokeWidth="1.1" />
+      <path d="M17 17 C30 20 38 28 42 42 C28 38 20 30 17 17 Z" fill={color} fillOpacity="0.16" strokeWidth="1.2" />
+      <path d="M21 21 L36 36" strokeWidth="0.8" />
+      <path d="M28 18 C34 16 40 18 44 22 M18 28 C16 34 18 40 22 44" strokeWidth="0.9" />
+      <circle cx="76" cy="6" r="2.2" fill={color} stroke="none" /><circle cx="6" cy="76" r="2.2" fill={color} stroke="none" />
+      <circle cx="83" cy="6" r="1.2" fill={color} stroke="none" /><circle cx="6" cy="83" r="1.2" fill={color} stroke="none" />
+      <circle cx="47" cy="47" r="1.8" fill={color} stroke="none" />
+    </svg>
+  );
+  const at = (pos: React.CSSProperties, flip: string) => (
+    <div className="absolute pointer-events-none" style={{ ...pos, transform: flip, opacity: 0.85 }}>{corner}</div>
+  );
+  const inset = 22;
+  return (
+    <div aria-hidden="true">
+      {at({ top: inset, left: inset }, 'none')}
+      {at({ top: inset, right: inset }, 'scaleX(-1)')}
+      {at({ bottom: inset, left: inset }, 'scaleY(-1)')}
+      {at({ bottom: inset, right: inset }, 'scale(-1, -1)')}
     </div>
   );
 }
