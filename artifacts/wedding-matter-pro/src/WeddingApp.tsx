@@ -1997,6 +1997,71 @@ function SalutNameField({ label, salValue, salPath, nameValue, namePath, namePla
   );
 }
 
+/* dd/mm/yyyy date field.
+   A native <input type="date"> draws its value in the browser's regional
+   format — mm/dd/yyyy on a US-locale machine — and no attribute changes that.
+   So the visible field is text that always reads dd/mm/yyyy, and the calendar
+   button opens a hidden native picker, which still carries `min` so past days
+   stay greyed out. The stored value stays ISO (YYYY-MM-DD). */
+function isoToDmy(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : '';
+}
+
+/** "17/10/2026" → "2026-10-17", or null unless it is a real calendar date. */
+function dmyToIso(dmy: string): string | null {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(dmy.trim());
+  if (!m) return null;
+  const [d, mo, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const date = new Date(y, mo - 1, d);
+  if (date.getFullYear() !== y || date.getMonth() !== mo - 1 || date.getDate() !== d) return null;   // 31/02
+  return toISODate(date);
+}
+
+function DateField({ value, onChange, min, invalid, c }: { value: string; onChange: (iso: string) => void; min?: string; invalid?: boolean; c: Palette }) {
+  const pickerRef = useRef<HTMLInputElement>(null);
+  const [text, setText] = useState(isoToDmy(value));
+  // Follow changes made elsewhere (the picker, loading a sample) — typing a
+  // half-finished date never changes `value`, so it isn't clobbered here.
+  useEffect(() => { setText(isoToDmy(value)); }, [value]);
+
+  const type = (raw: string) => {
+    // Typed digits get their slashes put in for them: "17102026" → "17/10/2026".
+    const digits = raw.replace(/\D/g, '').slice(0, 8);
+    const next = [digits.slice(0, 2), digits.slice(2, 4), digits.slice(4)].filter(Boolean).join('/');
+    setText(next);
+    if (!next) onChange('');
+    const iso = dmyToIso(next);
+    if (iso) onChange(iso);
+  };
+
+  const openPicker = () => {
+    const el = pickerRef.current;
+    if (!el) return;
+    try { el.showPicker(); } catch { el.focus(); el.click(); }   // Safari < 16 has no showPicker
+  };
+
+  return (
+    <div className="relative">
+      <Input c={c} value={text} invalid={invalid} inputMode="numeric" placeholder="dd/mm/yyyy" maxLength={10}
+        aria-label="Date (day/month/year)" className="w-full pr-12"
+        onChange={e => type(e.target.value)}
+        // A half-typed or impossible date (31/02) goes back to the saved one.
+        onBlur={() => setText(isoToDmy(value))} />
+      <button type="button" onClick={openPicker} aria-label="Pick a date from the calendar"
+        className="absolute right-1.5 top-1/2 -translate-y-1/2 w-9 h-9 grid place-items-center rounded-lg transition-opacity hover:opacity-75 focus-visible:outline-2"
+        style={{ color: c.gold, outlineColor: c.gold }}>
+        <Calendar className="w-4 h-4" />
+      </button>
+      {/* Rendered, not display:none, so showPicker() works and the popup
+          anchors to the field; invisible and out of the tab order. */}
+      <input ref={pickerRef} type="date" min={min} value={value} tabIndex={-1} aria-hidden="true"
+        onChange={e => onChange(e.target.value)}
+        className="absolute right-0 bottom-0 w-px h-px opacity-0 pointer-events-none" />
+    </div>
+  );
+}
+
 /* 12-hour time picker */
 function TimePicker({ hour, minute, ampm, onChange, c }: { hour: string; minute: string; ampm: 'AM' | 'PM'; onChange: (h: string, m: string, ap: 'AM' | 'PM') => void; c: Palette }) {
   const hours = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
@@ -2808,8 +2873,8 @@ function StepProgrammes({ form, setForm, c }: { form: FormState; setForm: React.
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <Field label="Date" required c={c}
                               error={past ? 'That date has already passed. Please pick today or a later date.' : undefined}>
-                              <Input c={c} type="date" min={todayISO()} value={f.date} invalid={past}
-                                onChange={e => updateProg(f.id, 'date', e.target.value)} />
+                              <DateField c={c} min={todayISO()} value={f.date} invalid={past}
+                                onChange={iso => updateProg(f.id, 'date', iso)} />
                             </Field>
                             <Field label="Time" c={c}>
                               <TimePicker hour={f.hour} minute={f.minute} ampm={f.ampm as 'AM' | 'PM'}
