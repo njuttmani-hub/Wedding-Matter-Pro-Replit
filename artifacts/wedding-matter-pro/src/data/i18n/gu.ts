@@ -92,6 +92,8 @@ const gu: CardTranslation = {
     timePattern: '{ampm} {h}:{m} કલાકે',
     am: 'સવારે',
     pm: 'સાંજે',
+    afternoon: 'બપોરે',
+    night: 'રાત્રે',
     mealFrom: '{time} થી ({meal})',
     dinner: 'રાત્રિ ભોજન',
     lunch: 'બપોરનું ભોજન',

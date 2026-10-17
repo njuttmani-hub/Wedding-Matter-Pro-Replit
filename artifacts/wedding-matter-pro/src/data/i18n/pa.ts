@@ -92,6 +92,8 @@ const pa: CardTranslation = {
     timePattern: '{ampm} {h}:{m} ਵਜੇ',
     am: 'ਸਵੇਰੇ',
     pm: 'ਸ਼ਾਮ',
+    afternoon: 'ਦੁਪਹਿਰ',
+    night: 'ਰਾਤ',
     mealFrom: '{time} ਤੋਂ ({meal})',
     dinner: 'ਰਾਤ ਦਾ ਖਾਣਾ',
     lunch: 'ਦੁਪਹਿਰ ਦਾ ਖਾਣਾ',

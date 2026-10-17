@@ -7,6 +7,8 @@
    failure (offline, blocked, a changed response) just returns null so the
    caller can keep the English and ask the customer to type it themselves. */
 
+import { CARD_LANGUAGES } from '../data/languages';
+
 const ENDPOINT = 'https://inputtools.google.com/request';
 
 // One result per (language, text) for the life of the page; names repeat a lot
@@ -30,7 +32,27 @@ const SEPARATORS = /(\s*[,;:!?()[\]/\n]+\s*)/;
 export async function transliterate(text: string, itc: string, signal?: AbortSignal): Promise<string | null> {
   const parts = text.trim().split(SEPARATORS);
   const out = await Promise.all(parts.map((p, i) => (i % 2 ? p : piece(p, itc, signal))));
-  return out.some(p => p === null) ? null : out.join('');
+  return out.some(p => p === null) ? null : normaliseDigits(out.join(''), itc);
+}
+
+// Code point of "0" in each Indian script's digit run (Devanagari, Bengali,
+// Gurmukhi, Gujarati, Odia, Tamil, Telugu, Kannada, Malayalam).
+const INDIC_ZEROS = [0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6, 0xd66];
+
+/** The service converts digits inconsistently: for Tamil "302001" comes back
+ *  as "௩0௨00௧", Tamil digits with Latin zeros. So every digit is folded back
+ *  to 0-9, then set in the language's own numerals only where its cards use
+ *  them (CardLanguage.numerals); Tamil and Malayalam cards keep 0-9. */
+function normaliseDigits(s: string, itc: string): string {
+  const ascii = s.replace(/[०-൯]/g, ch => {
+    const cp = ch.codePointAt(0)!;
+    const zero = INDIC_ZEROS.find(z => cp >= z && cp <= z + 9);
+    return zero === undefined ? ch : String(cp - zero);
+  });
+  const lang = CARD_LANGUAGES.find(l => l.inputTools === itc);
+  if (!lang?.numerals) return ascii;
+  const fmt = new Intl.NumberFormat(`${lang.locale}-u-nu-${lang.numerals}`, { useGrouping: false });
+  return ascii.replace(/\d/g, d => fmt.format(Number(d)));
 }
 
 async function piece(text: string, itc: string, signal?: AbortSignal): Promise<string | null> {

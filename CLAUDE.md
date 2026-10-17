@@ -62,6 +62,8 @@ This project's own Supabase instance is already fully set up — a fresh clone j
 - **Live card preview**: Page 1 (deities, template, names, address, compliments, kids, closing), then the programmes, either all on Page 2 or one sheet per function; every page at the card's exact proportions; white background with black text for legibility. Exports give one PNG per page and a PDF at the real physical size
 - **Card size**: chosen by the customer in the Typography step: one of the `CARD_SIZES` presets or a custom width × height in inches or cm (3–20 in each side). Stored in `form.design.cardSize`, always in inches. The admin dashboard shows each order at its own size; there is no longer a global admin size picker
 - **Programme pages**: `form.design.pageMode`, set at the bottom of the Events step. `'combined'` puts every function on page 2; `'separate'` gives each dated function its own sheet. Separate only takes effect with 2+ dated functions (`separateSheets()`), so preview, export and summary always agree
+- **Card language**: the whole card can print in English, Marathi, Hindi, Gujarati, Punjabi, Bengali, Tamil, Telugu, Kannada or Malayalam (picker on step 1 and the Typography step; `form.design.language` holds a LangCode). Fixed wording comes from `data/i18n/<code>.ts` — **drafted by Claude and awaiting native-speaker review**. Customers type in English; their names, addresses, venues etc. are transliterated into `form.scriptText[lang][path]` and stay editable. Fonts switch to ones that carry the script
+- **Separate function sheets** carry line-art for the function, corner ornaments, the couple, an invitation sentence with the hosts, and an optional per-function note (`Programme.note`, printed only on its own sheet)
 - **Reception meal type**: dinner or lunch selector for reception events, shown as "from X onwards (dinner/lunch)" on the card
 - **Programme dates cannot be in the past**: `min` on the picker plus a re-check in the step gate, since `min` is only advisory for a typed or pasted value
 - **Kids message**: a preset list plus a "write our own" option (`kidsCustom`) for naming the couple's own kids
@@ -70,7 +72,7 @@ This project's own Supabase instance is already fully set up — a fresh clone j
 - **Admin dashboard**: order listing with status badges, live-synced across devices; per-order modal shows card preview + export; gated behind Supabase Auth login
 - **22 invitation templates** across 8 categories (Classic, Romantic, Daughter, Modern, Reception, etc.)
 - **12 deities** with glyphs and mantras
-- **55 Google Fonts** supporting English, Hindi, Marathi, Gujarati scripts
+- **106 Google Fonts** covering Latin and all nine Indian scripts above
 
 ## Roadmap (small-business rebuild plan)
 

@@ -92,6 +92,8 @@ const hi: CardTranslation = {
     timePattern: '{ampm} {h}:{m} बजे',
     am: 'प्रातः',
     pm: 'सायं',
+    afternoon: 'दोपहर',
+    night: 'रात्रि',
     mealFrom: '{time} से ({meal})',
     dinner: 'रात्रिभोज',
     lunch: 'मध्याह्न भोज',

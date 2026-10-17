@@ -27,9 +27,11 @@ export interface CardLabels {
   residence: string;
   /** Heading above the compliments names: "With Best Compliments:" */
   withCompliments: string;
-  /** Before the bride's parents: "D/o" (daughter of). */
+  /** "Daughter of" with the bride's parents. Either a prefix ("D/o", printed
+   *  before the parents) or a pattern containing {parents} for languages that
+   *  put it after them ("{parents} यांची कन्या"). Read through childOf(). */
   daughterOf: string;
-  /** Before the groom's parents: "S/o" (son of). */
+  /** "Son of" with the groom's parents; same rules as daughterOf. */
   sonOf: string;
   /** Joins two names: " & " (keep the surrounding spaces). */
   and: string;
@@ -40,6 +42,11 @@ export interface CardLabels {
   timePattern: string;
   am: string;
   pm: string;
+  /** Optional words for 12–4:59 PM and 8 PM–3:59 AM, so a 1 PM lunch doesn't
+   *  print as "evening". English leaves them out and uses am/pm throughout;
+   *  a language without them falls back to pm/am, never to English. */
+  afternoon?: string;
+  night?: string;
   /** A reception's time with its meal: "from {time} onwards ({meal})" */
   mealFrom: string;
   dinner: string;

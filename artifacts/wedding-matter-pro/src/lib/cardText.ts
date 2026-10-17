@@ -53,6 +53,28 @@ export function localDigits(form: FormState, n: string): string {
   return n.replace(/\d/g, d => fmt.format(Number(d)));
 }
 
+/** The time-of-day word. The translation's own afternoon/night words are
+ *  looked up on the translation itself, not the English-merged labels, so a
+ *  language that lacks them falls back to its own pm/am rather than English. */
+function dayPart(form: FormState, hour12: number, ampm: 'AM' | 'PM'): string {
+  const L = cardStrings(form).labels;
+  const own = TRANSLATIONS[langOf(form).code].labels;
+  const h = hour12 % 12;   // 12 → 0
+  if (ampm === 'PM' && h < 5) return own?.afternoon || L.pm;
+  if (ampm === 'PM' && h >= 8) return own?.night || L.pm;
+  if (ampm === 'AM' && h < 4) return own?.night || L.am;
+  return ampm === 'AM' ? L.am : L.pm;
+}
+
+/** "Daughter of"/"son of" set with the parents' names, on whichever side the
+ *  language puts it: a label with {parents} is a pattern, anything else is a
+ *  prefix (English "D/o …"). */
+export function childOf(form: FormState, side: 'bride' | 'groom', parents: string): string {
+  const L = cardStrings(form).labels;
+  const label = side === 'bride' ? L.daughterOf : L.sonOf;
+  return label.includes('{parents}') ? label.replace('{parents}', parents) : `${label} ${parents}`;
+}
+
 /** A function's time in the card language, e.g. "7:30 PM" or "सायं. ७.३० वा." */
 export function cardTime(form: FormState, hour: string, minute: string, ampm: 'AM' | 'PM'): string {
   if (!hour) return '';
@@ -60,7 +82,7 @@ export function cardTime(form: FormState, hour: string, minute: string, ampm: 'A
   return L.timePattern
     .replace('{h}', localDigits(form, String(Number(hour))))
     .replace('{m}', localDigits(form, minute || '00'))
-    .replace('{ampm}', ampm === 'AM' ? L.am : L.pm)
+    .replace('{ampm}', dayPart(form, Number(hour), ampm))
     .trim();
 }
 

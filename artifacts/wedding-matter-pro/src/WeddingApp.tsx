@@ -18,7 +18,7 @@ import {
 import { fetchOrders, insertOrder, updateOrderStatus, deleteOrder as deleteOrderRow, subscribeToOrders } from './lib/orders';
 import { getSession, onAuthChange, signIn, signOut } from './lib/auth';
 import { CARD_LANGUAGES } from './data/languages';
-import { langOf, cardStrings, scriptText, cardDate, cardTime } from './lib/cardText';
+import { langOf, cardStrings, scriptText, cardDate, cardTime, childOf } from './lib/cardText';
 import { scriptFields, scriptValue, isLatinCard, personName, programmeName, fontHasScript, withLanguage, type ScriptField } from './lib/scriptFields';
 import { useScriptSuggestions, type ScriptSuggestions } from './lib/useScriptSuggestions';
 
@@ -502,12 +502,13 @@ function generateCorelText(form: FormState): string {
 
   const personBlock = (label: string, side: 'bride' | 'groom') => {
     const p = form[side];
-    const rel = side === 'bride' ? L.daughterOf : L.sonOf;
     // The English name in the header lets the studio match a script card to its order.
     let s = `─── ${label}${lang.code !== 'en' && p.name ? ` · ${p.name}` : ''} ───\n`;
     s += `${scriptText(form, `${side}.name`, p.name)}\n`;
-    if (p.fatherName) s += `${rel} ${personName(form, side, 'father')}\n`;
-    if (p.motherName) s += `${personName(form, side, 'mother')}\n`;
+    // Both parents on one line, as the card prints them: the "daughter of"
+    // wording sits after them in most Indian languages, so it can't split.
+    const parents = [p.fatherName && personName(form, side, 'father'), p.motherName && personName(form, side, 'mother')].filter(Boolean).join(L.and);
+    if (parents) s += `${childOf(form, side, parents)}\n`;
     if (p.grandfatherName) s += `G/o ${personName(form, side, 'grandfather')}\n`;
     if (p.grandmotherName) s += `${personName(form, side, 'grandmother')}\n`;
     return s + '\n';
@@ -3548,8 +3549,6 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
   const belowSide = form.aboveWeds === 'bride' ? 'groom' : 'bride';
   const above = form[aboveSide];
   const below = form[belowSide];
-  const aboveRelation = aboveSide === 'bride' ? L.daughterOf : L.sonOf;
-  const belowRelation = belowSide === 'bride' ? L.daughterOf : L.sonOf;
   const nm = (side: 'bride' | 'groom') => scriptText(form, `${side}.name`, form[side].name);
   const pName = (side: 'bride' | 'groom', role: 'father' | 'mother' | 'grandfather' | 'grandmother') => personName(form, side, role);
   const pair = (a: string, b: string) => (a && b ? `${a}${L.and}${b}` : a || b);
@@ -3635,7 +3634,7 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
         </div>
         {(above.fatherName || above.motherName) && (
           <div className="text-[10px] opacity-70 font-semibold mt-0.5">
-            {aboveRelation} {pair(pName(aboveSide, 'father'), pName(aboveSide, 'mother'))}
+            {childOf(form, aboveSide, pair(pName(aboveSide, 'father'), pName(aboveSide, 'mother')))}
           </div>
         )}
         {above.grandfatherName && (
@@ -3654,7 +3653,7 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
         </div>
         {(below.fatherName || below.motherName) && (
           <div className="text-[10px] opacity-70 font-semibold mt-0.5">
-            {belowRelation} {pair(pName(belowSide, 'father'), pName(belowSide, 'mother'))}
+            {childOf(form, belowSide, pair(pName(belowSide, 'father'), pName(belowSide, 'mother')))}
           </div>
         )}
         {below.grandfatherName && (
