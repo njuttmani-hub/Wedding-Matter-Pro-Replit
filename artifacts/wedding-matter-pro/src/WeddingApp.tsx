@@ -17,6 +17,7 @@ import {
 } from './data/constants';
 import { fetchOrders, insertOrder, updateOrderStatus, deleteOrder as deleteOrderRow, subscribeToOrders } from './lib/orders';
 import { getSession, onAuthChange, signIn, signOut } from './lib/auth';
+import { fetchMe, fetchStaff, manageStaff, codeFromName, captureRef, currentRef, staffLink, type StaffMember } from './lib/staff';
 import { CARD_LANGUAGES } from './data/languages';
 import { langOf, cardStrings, scriptText, cardDate, cardTime, childOf } from './lib/cardText';
 import { scriptFields, scriptValue, isLatinCard, personName, programmeName, fontHasScript, withLanguage, type ScriptField } from './lib/scriptFields';
@@ -594,9 +595,27 @@ export default function WeddingApp() {
   const [sessionLoading, setSessionLoading] = useState(true);
   const c = dark ? palette.dark : palette.light;
 
+  const [me, setMe] = useState<StaffMember | null>(null);
+  const [meLoading, setMeLoading] = useState(true);
+  const [staff, setStaff] = useState<StaffMember[]>([]);
+
   const refreshOrders = useCallback(async () => {
     setOrders(await fetchOrders());
   }, []);
+
+  // A customer arriving through a staff member's link (?by=rahul).
+  useEffect(() => { captureRef(); }, []);
+
+  // Who is signed in decides the dashboard: owner, staff, or neither. The
+  // database applies the same rule to which orders come back.
+  const userId = session?.user.id;
+  const refreshStaff = useCallback(async () => {
+    if (!userId) { setMe(null); setStaff([]); setMeLoading(false); return; }
+    setMeLoading(true);
+    const [mine, all] = await Promise.all([fetchMe(userId), fetchStaff()]);
+    setMe(mine); setStaff(all); setMeLoading(false);
+  }, [userId]);
+  useEffect(() => { refreshStaff(); }, [refreshStaff]);
 
   useEffect(() => {
     refreshOrders().finally(() => setOrdersLoading(false));
@@ -612,7 +631,7 @@ export default function WeddingApp() {
   }, [refreshOrders]);
 
   const addOrder = useCallback(async (couple: string, form: FormState): Promise<SubmittedOrder | null> => {
-    const order = await insertOrder(couple, form);
+    const order = await insertOrder(couple, form, currentRef());
     if (order) setOrders(prev => [order, ...prev]);
     return order;
   }, []);
@@ -662,7 +681,8 @@ export default function WeddingApp() {
             </motion.div>
           ) : session ? (
             <motion.div key="a" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35 }}>
-              <AdminDashboard c={c} dark={dark} orders={orders} ordersLoading={ordersLoading} onStatusChange={changeOrderStatus} onDelete={removeOrder} />
+              <AdminDashboard c={c} dark={dark} orders={orders} ordersLoading={ordersLoading} onStatusChange={changeOrderStatus} onDelete={removeOrder}
+                me={me} meLoading={meLoading} staff={staff} onStaffChanged={refreshStaff} />
             </motion.div>
           ) : (
             <motion.div key="a-login" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }} transition={{ duration: 0.35 }}>
@@ -4795,14 +4815,19 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
 }
 
 /* ─── Admin Dashboard ────────────────────────────────────────────────────── */
-function AdminDashboard({ c, dark, orders, ordersLoading, onStatusChange, onDelete }: { c: Palette; dark: boolean; orders: SubmittedOrder[]; ordersLoading: boolean; onStatusChange: (orderId: string, status: SubmittedOrder['status']) => void; onDelete: (orderId: string) => void }) {
+function AdminDashboard({ c, dark, orders, ordersLoading, onStatusChange, onDelete, me, meLoading, staff, onStaffChanged }: { c: Palette; dark: boolean; orders: SubmittedOrder[]; ordersLoading: boolean; onStatusChange: (orderId: string, status: SubmittedOrder['status']) => void; onDelete: (orderId: string) => void; me: StaffMember | null; meLoading: boolean; staff: StaffMember[]; onStaffChanged: () => void }) {
   const [filter, setFilter] = useState('All');
   const [search, setSearch] = useState('');
+  // 'all', 'direct' (no staff link) or a staff user id. Owner only.
+  const [staffFilter, setStaffFilter] = useState('all');
   const [selected, setSelected] = useState<SubmittedOrder | null>(null);
   const reduce = usePrefersReducedMotion();
+  const isOwner = me?.role === 'owner';
+  const staffName = (id: string | null | undefined) => (id ? staff.find(s => s.userId === id)?.name ?? 'Former staff' : 'Direct');
 
   const filtered = orders.filter(o =>
     (filter === 'All' || o.status === filter) &&
+    (staffFilter === 'all' || (staffFilter === 'direct' ? !o.staffId : o.staffId === staffFilter)) &&
     (o.couple.toLowerCase().includes(search.toLowerCase()) || o.orderId.toLowerCase().includes(search.toLowerCase()))
   );
 
@@ -4836,8 +4861,13 @@ function AdminDashboard({ c, dark, orders, ordersLoading, onStatusChange, onDele
         <div className="min-w-0">
           <div className="text-[10px] font-bold uppercase tracking-[0.34em] mb-1.5" style={{ color: c.gold }}>Designer Console</div>
           <h1 className="font-medium leading-none" style={{ fontFamily: "'Playfair Display', serif", fontSize: 'clamp(2.1rem, 6vw, 3.4rem)', color: c.text }}>
-            Orders
+            {isOwner || !me ? 'Orders' : 'My Orders'}
           </h1>
+          {me && (
+            <div className="text-xs font-semibold mt-2" style={{ color: c.subtext }}>
+              Signed in as {me.name} · {isOwner ? 'Owner, sees every order' : 'Staff, sees orders from your link only'}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] px-3 py-2 rounded-full"
           style={{ background: `${c.gold}12`, border: `1px solid ${c.border}`, color: c.subtext }}>
@@ -4845,6 +4875,17 @@ function AdminDashboard({ c, dark, orders, ordersLoading, onStatusChange, onDele
           Live · syncs across devices
         </div>
       </div>
+
+      {!meLoading && !me && (
+        <div role="status" className="rounded-3xl border p-4 sm:p-5 mb-5 text-sm font-semibold" style={{ borderColor: `${UI_WARN}66`, background: `${UI_WARN}12`, color: c.text }}>
+          This login isn't set up as staff yet, so it can't see any orders. Ask the owner to add you under Team.
+          <span className="block text-xs font-medium mt-1" style={{ color: c.subtext }}>
+            Owner: if this is your own login, re-run supabase/schema.sql in Supabase (see CLAUDE.md). It makes the first login the owner.
+          </span>
+        </div>
+      )}
+      {me && !isOwner && me.active && <StaffLinkCard me={me} c={c} />}
+      {isOwner && <TeamPanel staff={staff} orders={orders} onChanged={onStaffChanged} c={c} />}
 
       {/* Status counts (also act as filters) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3 mb-5">
@@ -4934,11 +4975,20 @@ function AdminDashboard({ c, dark, orders, ordersLoading, onStatusChange, onDele
               );
             })}
           </div>
-          {!ordersLoading && orders.length > 0 && (
-            <div className="text-[11px] font-bold uppercase tracking-[0.18em] shrink-0" style={{ color: c.subtext }}>
-              {filtered.length} of {orders.length}
-            </div>
-          )}
+          <div className="flex items-center gap-3 shrink-0 flex-wrap">
+            {isOwner && staff.some(s => s.role === 'staff') && (
+              <Select c={c} fieldSize="sm" value={staffFilter} onChange={e => setStaffFilter(e.target.value)} aria-label="Show orders from" className="w-auto min-w-[10rem]">
+                <option value="all">All staff</option>
+                <option value="direct">Direct (no staff link)</option>
+                {staff.filter(s => s.role === 'staff').map(s => <option key={s.userId} value={s.userId}>{s.name}{s.active ? '' : ' (disabled)'}</option>)}
+              </Select>
+            )}
+            {!ordersLoading && orders.length > 0 && (
+              <div className="text-[11px] font-bold uppercase tracking-[0.18em]" style={{ color: c.subtext }}>
+                {filtered.length} of {orders.length}
+              </div>
+            )}
+          </div>
         </div>
 
         {ordersLoading ? (
@@ -4975,7 +5025,7 @@ function AdminDashboard({ c, dark, orders, ordersLoading, onStatusChange, onDele
             </div>
             <button
               type="button"
-              onClick={() => { setSearch(''); setFilter('All'); }}
+              onClick={() => { setSearch(''); setFilter('All'); setStaffFilter('all'); }}
               className="inline-flex items-center gap-2 px-5 rounded-full border text-sm font-bold transition hover:opacity-80"
               style={{ minHeight: 44, borderColor: c.gold, color: c.gold, background: `${c.gold}10` }}
               {...focusRing(`${c.gold}55`)}
@@ -5008,6 +5058,11 @@ function AdminDashboard({ c, dark, orders, ordersLoading, onStatusChange, onDele
                   <span className="flex items-center gap-2 flex-wrap">
                     <span className="font-medium leading-tight" style={{ fontFamily: "'Playfair Display', serif", fontSize: '1.25rem', color: c.text }}>{o.couple}</span>
                     <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full" style={{ background: `${c.gold}18`, color: c.gold }}>{o.orderId}</span>
+                    {isOwner && staff.some(s => s.role === 'staff') && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: `${c.primary}14`, color: c.text }}>
+                        <User className="w-2.5 h-2.5" aria-hidden="true" />{staffName(o.staffId)}
+                      </span>
+                    )}
                   </span>
                   <span className="flex items-center gap-2 flex-wrap text-[11px] mt-1.5 font-semibold" style={{ color: c.subtext }}>
                     <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" aria-hidden="true" />{o.at}</span>
@@ -5037,6 +5092,174 @@ function AdminDashboard({ c, dark, orders, ordersLoading, onStatusChange, onDele
             onDelete={() => { deleteOrder(selected.orderId); setSelected(null); }} />
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+/* ─── Staff ──────────────────────────────────────────────────────────────────
+   Who sees which orders is decided in the database (RLS in schema.sql), not
+   here: these panels only manage accounts and show each person their link. */
+
+function CopyLinkButton({ link, c }: { link: string; c: Palette }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button type="button"
+      onClick={async () => { try { await navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 1800); } catch { /* clipboard blocked */ } }}
+      className="inline-flex items-center gap-1.5 px-3 rounded-full text-xs font-bold transition hover:opacity-80 shrink-0"
+      style={{ minHeight: 36, color: c.onAccent, background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}
+      {...focusRing(`${c.gold}55`)}>
+      {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied ? 'Copied' : 'Copy link'}
+    </button>
+  );
+}
+
+/** A staff member's own banner: the link to give their customers. */
+function StaffLinkCard({ me, c }: { me: StaffMember; c: Palette }) {
+  const link = staffLink(me.code);
+  return (
+    <div className="rounded-3xl border p-4 sm:p-5 mb-5 flex items-center gap-3 flex-wrap" style={{ borderColor: c.border, background: `${c.gold}0D` }}>
+      <div className="min-w-0 flex-1">
+        <div className="text-[10px] font-bold uppercase tracking-[0.24em] mb-1" style={{ color: c.gold }}>Your customer link</div>
+        <div className="text-sm font-semibold break-all" style={{ color: c.text }}>{link}</div>
+        <div className="text-xs mt-1" style={{ color: c.subtext }}>Orders placed through this link appear here, and only you (and the owner) can see them.</div>
+      </div>
+      <CopyLinkButton link={link} c={c} />
+    </div>
+  );
+}
+
+/** The owner's team manager: add staff, copy their links, disable, reset, remove. */
+function TeamPanel({ staff, orders, onChanged, c }: { staff: StaffMember[]; orders: SubmittedOrder[]; onChanged: () => void; c: Palette }) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ name: '', email: '', password: '', code: '' });
+  const [codeTouched, setCodeTouched] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  const [resetFor, setResetFor] = useState<string | null>(null);
+  const [resetPw, setResetPw] = useState('');
+
+  const members = staff.filter(s => s.role === 'staff');
+  const run = async (key: string, req: Parameters<typeof manageStaff>[0], done: string) => {
+    setBusy(key); setMessage(null);
+    const error = await manageStaff(req);
+    setBusy(null);
+    setMessage(error ? { ok: false, text: error } : { ok: true, text: done });
+    if (!error) onChanged();
+    return !error;
+  };
+
+  const add = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const ok = await run('create', { action: 'create', ...form }, `${form.name} can now sign in. Share their link below.`);
+    if (ok) { setForm({ name: '', email: '', password: '', code: '' }); setCodeTouched(false); }
+  };
+
+  return (
+    <div className="rounded-3xl border shadow-md mb-5 overflow-hidden" style={{ borderColor: c.border, background: c.surface }}>
+      <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
+        className="w-full flex items-center justify-between gap-3 px-4 sm:px-6 py-4 text-left" {...focusRing(`${c.gold}55`)}>
+        <span className="flex items-center gap-3 min-w-0">
+          <span className="w-9 h-9 rounded-full grid place-items-center shrink-0" style={{ background: `${c.gold}1F`, border: `1px solid ${c.gold}44` }}>
+            <User className="w-4 h-4" style={{ color: c.gold }} aria-hidden="true" />
+          </span>
+          <span className="min-w-0">
+            <span className="block font-medium" style={{ fontFamily: "'Playfair Display', serif", fontSize: '1.25rem', color: c.text }}>Team</span>
+            <span className="block text-xs" style={{ color: c.subtext }}>{members.length} staff member{members.length === 1 ? '' : 's'} · each sees only orders from their own link</span>
+          </span>
+        </span>
+        <ChevronDown className={`w-4 h-4 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} style={{ color: c.gold }} aria-hidden="true" />
+      </button>
+
+      {open && (
+        <div className="px-4 sm:px-6 pb-6 pt-1 border-t space-y-5" style={{ borderColor: c.border }}>
+          {message && (
+            <div role="status" className="mt-4 text-sm font-semibold rounded-xl px-3 py-2.5" style={{ color: message.ok ? UI_OK : UI_ALERT, background: `${message.ok ? UI_OK : UI_ALERT}14` }}>{message.text}</div>
+          )}
+
+          <div className="space-y-2.5 pt-4">
+            {members.length === 0 && <div className="text-sm" style={{ color: c.subtext }}>No staff yet. Add the first one below.</div>}
+            {members.map(s => {
+              const count = orders.filter(o => o.staffId === s.userId).length;
+              return (
+                <div key={s.userId} className="rounded-2xl border p-3.5 sm:p-4" style={{ borderColor: c.border, opacity: s.active ? 1 : 0.6 }}>
+                  <div className="flex items-start gap-3 flex-wrap">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold" style={{ color: c.text }}>{s.name}</span>
+                        {!s.active && <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full" style={{ color: UI_ALERT, background: `${UI_ALERT}14` }}>Disabled</span>}
+                        <span className="text-[11px]" style={{ color: c.subtext }}>{count} order{count === 1 ? '' : 's'}</span>
+                      </div>
+                      <div className="text-xs mt-0.5 break-all" style={{ color: c.subtext }}>{s.email}</div>
+                      <div className="text-xs mt-1 break-all font-medium" style={{ color: c.gold }}>{staffLink(s.code)}</div>
+                    </div>
+                    <CopyLinkButton link={staffLink(s.code)} c={c} />
+                  </div>
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    <button type="button" disabled={!!busy}
+                      onClick={() => run(`active-${s.userId}`, { action: 'setActive', userId: s.userId, active: !s.active }, s.active ? `${s.name} can no longer sign in.` : `${s.name} can sign in again.`)}
+                      className="px-3 rounded-full border text-xs font-bold disabled:opacity-50" style={{ minHeight: 34, borderColor: c.border, color: c.text }} {...focusRing(`${c.gold}55`)}>
+                      {busy === `active-${s.userId}` ? 'Saving…' : s.active ? 'Disable' : 'Enable'}
+                    </button>
+                    <button type="button" disabled={!!busy} onClick={() => { setResetFor(resetFor === s.userId ? null : s.userId); setResetPw(''); }}
+                      className="px-3 rounded-full border text-xs font-bold disabled:opacity-50" style={{ minHeight: 34, borderColor: c.border, color: c.text }} {...focusRing(`${c.gold}55`)}>
+                      Reset password
+                    </button>
+                    {confirmRemove === s.userId ? (
+                      <>
+                        <button type="button" disabled={!!busy}
+                          onClick={async () => { if (await run(`remove-${s.userId}`, { action: 'remove', userId: s.userId }, `${s.name} was removed. Their orders now show only to you.`)) setConfirmRemove(null); }}
+                          className="px-3 rounded-full text-xs font-bold disabled:opacity-50" style={{ minHeight: 34, color: '#fff', background: UI_ALERT }} {...focusRing(`${c.gold}55`)}>
+                          {busy === `remove-${s.userId}` ? 'Removing…' : `Yes, remove ${s.name}`}
+                        </button>
+                        <button type="button" onClick={() => setConfirmRemove(null)} className="px-3 rounded-full text-xs font-bold" style={{ minHeight: 34, color: c.subtext }}>Cancel</button>
+                      </>
+                    ) : (
+                      <button type="button" disabled={!!busy} onClick={() => setConfirmRemove(s.userId)}
+                        className="px-3 rounded-full border text-xs font-bold disabled:opacity-50" style={{ minHeight: 34, borderColor: `${UI_ALERT}55`, color: UI_ALERT }} {...focusRing(`${c.gold}55`)}>
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                  {resetFor === s.userId && (
+                    <form className="flex gap-2 mt-3 flex-wrap" onSubmit={async e => { e.preventDefault(); if (await run(`reset-${s.userId}`, { action: 'resetPassword', userId: s.userId, password: resetPw }, `New password set for ${s.name}. Tell them in person or by phone.`)) setResetFor(null); }}>
+                      <Input c={c} fieldSize="sm" type="text" placeholder="New password (8+ characters)" value={resetPw} onChange={e => setResetPw(e.target.value)} className="flex-1 min-w-[12rem]" aria-label={`New password for ${s.name}`} />
+                      <button type="submit" disabled={!!busy || resetPw.length < 8} className="px-4 rounded-full text-xs font-bold disabled:opacity-50" style={{ minHeight: 40, color: c.onAccent, background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }}>
+                        {busy === `reset-${s.userId}` ? 'Saving…' : 'Set password'}
+                      </button>
+                    </form>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <form onSubmit={add} className="rounded-2xl border p-4 space-y-3" style={{ borderColor: c.border, background: `${c.gold}08` }}>
+            <div className="text-[10px] font-bold uppercase tracking-[0.24em]" style={{ color: c.gold }}>Add a staff member</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Field label="Name" required c={c}>
+                <Input c={c} value={form.name} placeholder="Rahul Verma"
+                  onChange={e => setForm(f => ({ ...f, name: e.target.value, code: codeTouched ? f.code : codeFromName(e.target.value) }))} />
+              </Field>
+              <Field label="Email (their login)" required c={c}>
+                <Input c={c} type="email" value={form.email} placeholder="rahul@example.com" onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
+              </Field>
+              <Field label="Password" required hint="8+ characters. Tell them in person or by phone." c={c}>
+                <Input c={c} type="text" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} />
+              </Field>
+              <Field label="Link name" required hint={form.code ? staffLink(form.code) : 'lowercase letters, digits, dashes'} c={c}>
+                <Input c={c} value={form.code} placeholder="rahul"
+                  onChange={e => { setCodeTouched(true); setForm(f => ({ ...f, code: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })); }} />
+              </Field>
+            </div>
+            <button type="submit" disabled={!!busy || !form.name || !form.email || form.password.length < 8 || form.code.length < 2}
+              className="inline-flex items-center gap-2 px-5 rounded-full text-sm font-bold disabled:opacity-50"
+              style={{ minHeight: 44, color: c.onAccent, background: `linear-gradient(135deg, ${c.primary}, ${c.gold})` }} {...focusRing(`${c.gold}55`)}>
+              {busy === 'create' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Add staff member
+            </button>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

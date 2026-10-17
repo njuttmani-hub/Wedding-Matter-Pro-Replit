@@ -8,6 +8,7 @@ interface OrderRow {
   status: SubmittedOrder['status'];
   form: FormState;
   created_at: string;
+  staff_id?: string | null;
 }
 
 const ORDER_ID_PREFIX = 'WMP-';
@@ -26,6 +27,7 @@ function fromRow(row: OrderRow): SubmittedOrder {
     // in so the dashboard renders those cards exactly as it always did.
     form: { ...row.form, design: { ...LEGACY_DESIGN_DEFAULTS, ...row.form.design } },
     status: row.status,
+    staffId: row.staff_id ?? null,
   };
 }
 
@@ -35,25 +37,29 @@ function orderNumber(orderId: string): number {
 
 export async function fetchOrders(): Promise<SubmittedOrder[]> {
   if (!supabase) return [];
-  const { data, error } = await supabase
-    .from('orders')
-    .select('order_number, couple, status, form, created_at')
-    .order('created_at', { ascending: false });
+  const query = (cols: string) => supabase!.from('orders').select(cols).order('created_at', { ascending: false });
+  let { data, error } = await query('order_number, couple, status, form, created_at, staff_id');
+  // 42703 = no such column: the database predates staff accounts (schema.sql
+  // not re-run yet). Load the orders without attribution rather than none.
+  if (error?.code === '42703') ({ data, error } = await query('order_number, couple, status, form, created_at'));
   if (error) {
     console.error('[orders] fetch failed', error);
     return [];
   }
-  return (data as OrderRow[]).map(fromRow);
+  return (data as unknown as OrderRow[]).map(fromRow);
 }
 
 // Goes through the create_order() RPC rather than a direct table insert —
 // customers (the anon key) have no table privileges at all, only execute
 // rights on this function. See supabase/schema.sql for why.
-export async function insertOrder(couple: string, form: FormState): Promise<SubmittedOrder | null> {
+// `ref` is the ?by= code of the staff member whose link the customer used.
+export async function insertOrder(couple: string, form: FormState, ref: string | null = null): Promise<SubmittedOrder | null> {
   if (!supabase) return null;
-  const { data, error } = await supabase
-    .rpc('create_order', { p_couple: couple, p_form: form })
-    .single();
+  const create = (args: Record<string, unknown>) => supabase!.rpc('create_order', args).single();
+  let { data, error } = await create(ref ? { p_couple: couple, p_form: form, p_ref: ref } : { p_couple: couple, p_form: form });
+  // PGRST202 = no create_order taking p_ref: the database predates staff
+  // accounts. Never lose a customer's order over that; save it unattributed.
+  if (error?.code === 'PGRST202' && ref) ({ data, error } = await create({ p_couple: couple, p_form: form }));
   if (error) {
     console.error('[orders] insert failed', error);
     return null;

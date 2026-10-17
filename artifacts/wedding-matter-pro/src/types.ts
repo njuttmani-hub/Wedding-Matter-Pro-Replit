@@ -116,4 +116,7 @@ export interface SubmittedOrder {
   couple: string;
   form: FormState;
   status: 'New' | 'In Progress' | 'Completed';
+  /** The staff member whose customer link it came through (staff.user_id);
+   *  null for orders without one, which only the owner sees. */
+  staffId?: string | null;
 }
