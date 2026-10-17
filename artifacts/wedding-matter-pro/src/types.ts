@@ -43,6 +43,9 @@ export interface Programme {
   venue: string;
   address: string;
   mealType?: 'none' | 'dinner' | 'lunch';
+  /** Optional line printed on this function's own sheet: dress code,
+   *  "Lunch to follow", an RSVP name and number. Absent on older forms. */
+  note?: string;
 }
 
 /** The printed card's trim size. Always stored in inches whatever the customer
@@ -75,7 +78,21 @@ export interface FormState {
   programmes: Programme[];
   withCompliments: string;
   blessingsOnly: boolean;
+  /** The customer's own text in the card's script, per language code, keyed
+   *  by field path ('bride.name', 'programme.<id>.venue' …). Suggested from
+   *  the English by transliteration, then editable. Kept per language so
+   *  switching Marathi → Gujarati → Marathi doesn't lose their corrections.
+   *  Read it through scriptText() in lib/cardText.ts. Absent on older forms. */
+  scriptText?: Record<string, Record<string, string>>;
+  /** The last transliteration suggested for each scriptText entry, with the
+   *  English it came from, same keys as scriptText. A scriptText value still
+   *  equal to its `out` is untouched by the customer, so it may be replaced
+   *  when the English changes; anything else is their edit and is left alone.
+   *  Bookkeeping only, never printed. Absent on older forms. */
+  scriptAuto?: Record<string, Record<string, { src: string; out: string }>>;
   design: {
+    /** A LangCode from data/languages.ts ('en', 'mr' …). Older forms hold
+     *  'English'; read it through langOf() in lib/cardText.ts. */
     language: string;
     headingFont: string;
     bodyFont: string;
