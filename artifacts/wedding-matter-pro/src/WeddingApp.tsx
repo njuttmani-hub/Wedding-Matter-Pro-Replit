@@ -17,7 +17,10 @@ import {
 } from './data/constants';
 import { fetchOrders, insertOrder, updateOrderStatus, deleteOrder as deleteOrderRow, subscribeToOrders } from './lib/orders';
 import { getSession, onAuthChange, signIn, signOut } from './lib/auth';
-import { cardStrings, scriptText, cardDate, cardTime } from './lib/cardText';
+import { CARD_LANGUAGES } from './data/languages';
+import { langOf, cardStrings, scriptText, cardDate, cardTime } from './lib/cardText';
+import { scriptFields, scriptValue, isLatinCard, personName, programmeName, fontHasScript, withLanguage, type ScriptField } from './lib/scriptFields';
+import { useScriptSuggestions, type ScriptSuggestions } from './lib/useScriptSuggestions';
 
 /* ─── Storage keys ───────────────────────────────────────────────────────── */
 const DRAFT_KEY = 'wmp_draft_v3';
@@ -320,17 +323,43 @@ function fmtTime(h: string, m: string, ap: string) {
   return `${h}:${m} ${ap}`;
 }
 
+/** Puts the couple's names into a template, as they print in the card's language. */
 function fillTemplate(text: string, form: FormState): string {
-  return text.replace(/\{bride\}/g, form.bride.name || '').replace(/\{groom\}/g, form.groom.name || '');
+  const bride = scriptText(form, 'bride.name', form.bride.name || '');
+  const groom = scriptText(form, 'groom.name', form.groom.name || '');
+  return text.replace(/\{bride\}/g, bride).replace(/\{groom\}/g, groom);
+}
+
+/** The chosen template's paragraph in the card's language, names filled in. */
+function templateText(form: FormState, id: number | null): string {
+  const t = INVITATION_TEMPLATES.find(x => x.id === id);
+  return t ? fillTemplate(cardStrings(form).templates[t.id] ?? t.text, form) : '';
+}
+
+/** The relation word ("Weds") in the card's language. */
+function relationText(form: FormState): string {
+  const r = RELATION_WORDS.find(x => x.id === form.relationWord);
+  return r ? (cardStrings(form).relationWords[r.id] ?? r.label) : (cardStrings(form).relationWords.weds ?? 'Weds');
+}
+
+/** The closing line in the card's language, or '' for none. */
+function closingText(form: FormState): string {
+  const t = CLOSING_TAGS.find(x => x.id === form.closingTag);
+  return t ? (cardStrings(form).closingTags[t.id] ?? t.label) : '';
 }
 
 const KIDS_CUSTOM = 'custom';  // sentinel kidsLine id — the KIDS_LINES presets use numeric ids, so it can't collide
 
-/** The kids line as it should print: the couple's own words when they chose to
- *  write one, otherwise the chosen preset. Blank custom text means no line. */
+/** The kids line as it should print, in the card's language: the couple's own
+ *  words when they chose to write one, otherwise the chosen preset. Blank
+ *  custom text means no line. */
 function kidsLineText(form: FormState): string {
-  if (form.kidsLine === KIDS_CUSTOM) return (form.kidsCustom || '').trim();
-  return KIDS_LINES.find(t => t.id === form.kidsLine)?.label || '';
+  if (form.kidsLine === KIDS_CUSTOM) {
+    const own = (form.kidsCustom || '').trim();
+    return own ? scriptText(form, 'kidsCustom', own) : '';
+  }
+  const t = KIDS_LINES.find(x => x.id === form.kidsLine);
+  return t ? (cardStrings(form).kidsLines[t.id] ?? t.label) : '';
 }
 
 /** Whether the card gets one sheet per programme. A saved 'separate' choice
@@ -341,15 +370,17 @@ function separateSheets(form: FormState): boolean {
   return form.design.pageMode === 'separate' && form.programmes.filter(p => p.date).length >= 2;
 }
 
-/** A programme's printed date and time. A reception with a meal prints its
- *  time as "from 7:30 PM onwards (dinner)" in place of the bare time. Shared by
- *  the combined page and the per-programme sheets so the two never drift. */
-function progWhen(f: Programme, long = false): { date: string; time: string } {
-  const date = new Date(f.date + 'T00:00:00').toLocaleDateString('en-IN', long
-    ? { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }
-    : { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-  const meal = f.preset === 'reception' && f.mealType && f.mealType !== 'none';
-  const time = meal ? `from ${fmtTime(f.hour, f.minute, f.ampm)} onwards (${f.mealType})` : fmtTime(f.hour, f.minute, f.ampm);
+/** A programme's printed date and time, in the card's language (English when
+ *  no form is given). A reception with a meal prints its time as "from 7:30 PM
+ *  onwards (dinner)" in place of the bare time. Shared by the combined page and
+ *  the per-programme sheets so the two never drift. */
+function progWhen(f: Programme, long = false, form?: FormState): { date: string; time: string } {
+  const card = form ?? initialForm;   // initialForm is an English card
+  const date = cardDate(card, f.date, long);
+  const L = cardStrings(card).labels;
+  const at = cardTime(card, f.hour, f.minute, f.ampm);
+  const meal = f.preset === 'reception' && f.mealType && f.mealType !== 'none' && at;
+  const time = meal ? L.mealFrom.replace('{time}', at).replace('{meal}', f.mealType === 'lunch' ? L.lunch : L.dinner) : at;
   return { date, time };
 }
 
@@ -452,46 +483,54 @@ function cardSizeName(s: CardSize): string {
   return CARD_SIZES.find(p => p.id === s.preset)?.label || 'Custom';
 }
 
+/** The matter as the designer types it into CorelDRAW: every value in the
+ *  card's language, every section header in English so the studio can follow
+ *  a card in any script. */
 function generateCorelText(form: FormState): string {
   const template = INVITATION_TEMPLATES.find(t => t.id === form.selectedTemplate);
   const closing = CLOSING_TAGS.find(t => t.id === form.closingTag);
   const kidsLine = kidsLineText(form);
-  const relation = RELATION_WORDS.find(r => r.id === form.relationWord);
   const deityNames = form.deities.map(id => DEITIES.find(d => d.id === id)?.name).join(' · ');
   const deityGlyphs = form.deities.map(id => DEITIES.find(d => d.id === id)?.glyph).join(' ');
+  const lang = langOf(form);
+  const L = cardStrings(form).labels;
+  const fontName = (fam: string) => FONTS.find(f => f.family === fam)?.name || fam;
 
-  const above = form.aboveWeds === 'bride' ? form.bride : form.groom;
-  const below = form.aboveWeds === 'bride' ? form.groom : form.bride;
-  const aboveRole = form.aboveWeds === 'bride' ? 'BRIDE (ABOVE WEDS)' : 'GROOM (ABOVE WEDS)';
-  const belowRole = form.aboveWeds === 'bride' ? 'GROOM (BELOW WEDS)' : 'BRIDE (BELOW WEDS)';
-  const aboveRelation = form.aboveWeds === 'bride' ? 'D/o' : 'S/o';
-  const belowRelation = form.aboveWeds === 'bride' ? 'S/o' : 'D/o';
+  const aboveSide = form.aboveWeds;
+  const belowSide = form.aboveWeds === 'bride' ? 'groom' : 'bride';
+  const role = (side: 'bride' | 'groom', pos: string) => `${side.toUpperCase()} (${pos} WEDS)`;
 
-  const personBlock = (label: string, p: PersonInfo, rel: string) => {
-    let s = `─── ${label} ───\n`;
-    s += `${p.name}\n`;
-    if (p.fatherName) s += `${rel} ${pn(p.fatherPrefix, p.fatherName)}\n`;
-    if (p.motherName) s += `${pn(p.motherPrefix, p.motherName)}\n`;
-    if (p.grandfatherName) s += `G/o ${pn(p.grandfatherPrefix, p.grandfatherName)}\n`;
-    if (p.grandmotherName) s += `${pn(p.grandmotherPrefix, p.grandmotherName)}\n`;
+  const personBlock = (label: string, side: 'bride' | 'groom') => {
+    const p = form[side];
+    const rel = side === 'bride' ? L.daughterOf : L.sonOf;
+    // The English name in the header lets the studio match a script card to its order.
+    let s = `─── ${label}${lang.code !== 'en' && p.name ? ` · ${p.name}` : ''} ───\n`;
+    s += `${scriptText(form, `${side}.name`, p.name)}\n`;
+    if (p.fatherName) s += `${rel} ${personName(form, side, 'father')}\n`;
+    if (p.motherName) s += `${personName(form, side, 'mother')}\n`;
+    if (p.grandfatherName) s += `G/o ${personName(form, side, 'grandfather')}\n`;
+    if (p.grandmotherName) s += `${personName(form, side, 'grandmother')}\n`;
     return s + '\n';
   };
 
   let s = '';
   s += `╔══════════════════════════════════╗\n║   WEDDING CARD MATTER EXPORT     ║\n╚══════════════════════════════════╝\n\n`;
+  s += `─── CARD LANGUAGE ───\n${lang.name}${lang.code !== 'en' ? ` (${lang.native})` : ''} · ${lang.script} script · set in ${fontName(form.design.headingFont)} / ${fontName(form.design.bodyFont)} / ${fontName(form.design.scriptFont)}\n\n`;
   s += `─── CARD ORDER ───\n${form.aboveWeds === 'bride' ? 'Bride ABOVE Weds · Groom BELOW' : 'Groom ABOVE Weds · Bride BELOW'}\n\n`;
   s += `─── DEITIES ───\n${deityGlyphs}\n${deityNames}\nMantra: ${DEITIES.find(d => d.id === form.deities[0])?.mantra || '—'}\n\n`;
-  s += `─── DESIGN ───\nLayout: ${form.design.layout.toUpperCase()} | Language: ${form.design.language}\nHeading: ${form.design.headingFont}\nBody: ${form.design.bodyFont}\nScript: ${form.design.scriptFont}\nSize ${form.design.fontSize}px\n\n`;
+  s += `─── DESIGN ───\nLayout: ${form.design.layout.toUpperCase()} | Language: ${lang.name}\nHeading: ${form.design.headingFont}\nBody: ${form.design.bodyFont}\nScript: ${form.design.scriptFont}\nSize ${form.design.fontSize}px\n\n`;
   s += `─── CARD SIZE ───\n${cardSizeName(form.design.cardSize)}: ${cardSizeText(form.design.cardSize)}\n\n`;
-  s += `─── INVITATION TEMPLATE #${template?.id} (${template?.category}) ───\n${fillTemplate(template?.text || '', form)}\n\n`;
-  s += personBlock(aboveRole, above, aboveRelation);
-  s += `─── RELATION ───\n${relation?.label || 'Weds'}\n\n`;
-  s += personBlock(belowRole, below, belowRelation);
+  s += `─── INVITATION TEMPLATE #${template?.id} (${template?.category}) ───\n${templateText(form, form.selectedTemplate)}\n\n`;
+  s += personBlock(role(aboveSide, 'ABOVE'), aboveSide);
+  s += `─── RELATION ───\n${relationText(form)}\n\n`;
+  s += personBlock(role(belowSide, 'BELOW'), belowSide);
   const progBlock = (f: Programme, head: string) => {
-    let b = `\n${head}\n  Date: ${f.date}\n`;
-    if (f.hour) b += `  Time: ${fmtTime(f.hour, f.minute, f.ampm)}\n`;
-    if (f.venue) b += `  Venue: ${f.venue}\n`;
-    if (f.address) b += `  Address: ${f.address}\n`;
+    const when = progWhen(f, true, form);
+    // The ISO date too on a script card, so the studio can check it at a glance.
+    let b = `\n${head}\n  Date: ${when.date}${lang.code !== 'en' && f.date ? ` [${f.date}]` : ''}\n`;
+    if (f.hour) b += `  Time: ${when.time}\n`;
+    if (f.venue) b += `  Venue: ${scriptText(form, `programme.${f.id}.venue`, f.venue)}\n`;
+    if (f.address) b += `  Address: ${scriptText(form, `programme.${f.id}.address`, f.address)}\n`;
     return b;
   };
   if (separateSheets(form)) {
@@ -517,12 +556,16 @@ function generateCorelText(form: FormState): string {
     if (undated.length) s += `\nNo date, so not on any sheet: ${undated.map(f => f.name).join(', ')}\n`;
   } else {
     s += `─── PROGRAMMES ───\n`;
-    form.programmes.forEach((f, i) => { s += progBlock(f, `[${i + 1}] ${f.name}`); });
+    if (lang.code !== 'en') s += `Heading: ${L.programmes}\n`;
+    form.programmes.forEach((f, i) => {
+      const name = programmeName(form, f);
+      s += progBlock(f, `[${i + 1}] ${name}${name !== f.name ? ` (${f.name})` : ''}`);
+    });
   }
-  if (form.family.residenceAddress) s += `\n─── RESIDENCE ───\n${form.family.residenceAddress}\n`;
-  if (form.withCompliments) s += `\n─── WITH COMPLIMENTS ───\n${form.withCompliments}\n`;
+  if (form.family.residenceAddress) s += `\n─── RESIDENCE ───\n${lang.code !== 'en' ? `${L.residence}\n` : ''}${scriptText(form, 'family.residenceAddress', form.family.residenceAddress)}\n`;
+  if (form.withCompliments) s += `\n─── WITH COMPLIMENTS ───\n${lang.code !== 'en' ? `${L.withCompliments}\n` : ''}${scriptText(form, 'withCompliments', form.withCompliments)}\n`;
   if (kidsLine) s += `\n─── KIDS LINE ───\n${kidsLine}\n`;
-  if (closing) s += `\n─── CLOSING TAG ───\n[${closing.id.toUpperCase()}] ${closing.label}\n`;
+  if (closing) s += `\n─── CLOSING TAG ───\n[${closing.id.toUpperCase()}] ${closingText(form)}\n`;
   return s;
 }
 
@@ -1083,7 +1126,11 @@ function CustomerFlow({ c, dark, addOrder, onBack }: { c: Palette; dark: boolean
     });
   };
 
-  const fillSample = () => { setForm(sampleForm); showToast('Sample card loaded!'); };
+  // Suggests every printed value in the card's script, whichever step it was typed on.
+  const script = useScriptSuggestions(form, setForm);
+
+  // Keeps the card language already chosen, so a Marathi customer sees a Marathi sample.
+  const fillSample = () => { setForm(prev => withLanguage(sampleForm, langOf(prev).code)); showToast('Sample card loaded!'); };
   const clearDraft = () => { setForm(initialForm); try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ } };
 
   const canNext = useMemo(() => {
@@ -1175,14 +1222,14 @@ function CustomerFlow({ c, dark, addOrder, onBack }: { c: Palette; dark: boolean
         <div className="min-w-0 lg:col-span-7 xl:col-span-6">
           <AnimatePresence mode="wait">
             <motion.div key={step} initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -16 }} transition={{ duration: 0.28 }}>
-              {step === 0 && <StepFamily form={form} update={update} setForm={setForm} c={c} dark={dark} />}
+              {step === 0 && <StepFamily form={form} update={update} setForm={setForm} c={c} dark={dark} script={script} />}
               {step === 1 && <StepDeities form={form} setForm={setForm} c={c} />}
               {step === 2 && <StepInvitation form={form} update={update} c={c} dark={dark} />}
               {step === 3 && <StepProgrammes form={form} setForm={setForm} c={c} />}
               {step === 4 && <StepExtras form={form} update={update} c={c} />}
-              {step === 5 && <StepDesign form={form} update={update} c={c} dark={dark} />}
-              {step === 6 && <StepPreview form={form} update={update} c={c} dark={dark} />}
-              {step === 7 && <StepSubmit form={form} update={update} c={c} onSubmit={submit} setStep={setStep} submitting={submitting} />}
+              {step === 5 && <StepDesign form={form} update={update} setForm={setForm} c={c} dark={dark} />}
+              {step === 6 && <StepPreview form={form} update={update} c={c} dark={dark} script={script} />}
+              {step === 7 && <StepSubmit form={form} update={update} c={c} onSubmit={submit} setStep={setStep} submitting={submitting} script={script} />}
             </motion.div>
           </AnimatePresence>
           <NavButtons step={step} prev={prev} next={next} onSubmit={submit} c={c} canNext={canNext} submitting={submitting} />
@@ -2080,14 +2127,129 @@ function OptionRow({ active, onClick, c, children, disabled }: { active: boolean
   );
 }
 
+/* ─── Card language ──────────────────────────────────────────────────────── */
+/** The card's language, shown by each language's own name. Switching also
+ *  swaps any font that can't set the new script (see withLanguage). */
+function LanguagePicker({ form, setForm, c, note }: { form: FormState; setForm: React.Dispatch<React.SetStateAction<FormState>>; c: Palette; note?: string }) {
+  const current = langOf(form);
+  return (
+    <div>
+      <GroupHeading label="Card language" note={current.code === 'en' ? 'English' : `${current.name} · ${current.native}`} c={c} />
+      <div role="radiogroup" aria-label="Card language" className="grid grid-cols-2 min-[420px]:grid-cols-3 sm:grid-cols-5 gap-2">
+        {CARD_LANGUAGES.map(l => {
+          const on = current.code === l.code;
+          return (
+            <button key={l.code} type="button" role="radio" aria-checked={on}
+              onClick={() => { if (!on) setForm(prev => withLanguage(prev, l.code)); }}
+              className="min-w-0 min-h-[60px] px-1 py-2 rounded-2xl border flex flex-col items-center justify-center gap-0.5 transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-2"
+              style={{ borderColor: on ? c.gold : c.border, background: on ? `linear-gradient(160deg, ${c.gold}22, ${c.primary}12)` : 'transparent', outlineColor: c.gold }}>
+              <span lang={l.code} className="leading-tight truncate max-w-full"
+                style={{ fontFamily: `${l.code === 'en' ? "'Playfair Display'" : l.defaultFonts.heading}, serif`, fontSize: '1rem', color: on ? c.goldDeep : c.text }}>
+                {l.native}
+              </span>
+              {l.code !== 'en' && (
+                <span className="text-[9px] font-bold uppercase tracking-[0.16em] leading-none" style={{ color: on ? c.gold : c.subtext }}>{l.name}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      {note && <p className="text-[11px] font-medium mt-2.5 leading-snug" style={{ color: c.subtext }}>{note}</p>}
+    </div>
+  );
+}
+
+/** Every printed value the customer typed, in the card's script: suggested by
+ *  transliteration (useScriptSuggestions), and editable. `onlyMissing` lists
+ *  just the ones with no script version yet — the reminder on later steps. */
+function ScriptTextEditor({ form, script, c, onlyMissing = false }: { form: FormState; script: ScriptSuggestions; c: Palette; onlyMissing?: boolean }) {
+  const lang = langOf(form);
+  const all = scriptFields(form);
+  const fields = onlyMissing ? all.filter(f => !scriptValue(form, f.path).trim()) : all;
+  // A face that certainly carries the script, whatever the card's own fonts are.
+  const inputFont = fontHasScript(form.design.bodyFont, lang.script) ? form.design.bodyFont : lang.defaultFonts.body;
+
+  if (!all.length) {
+    return (
+      <p className="text-[12px] font-medium rounded-2xl border border-dashed px-4 py-4 text-center" style={{ color: c.subtext, borderColor: c.border }}>
+        Names appear here in {lang.native} as you type them above.
+      </p>
+    );
+  }
+  if (!fields.length) return null;
+
+  const groups: { name: string; items: ScriptField[] }[] = [];
+  for (const f of fields) {
+    const g = groups.find(x => x.name === f.group);
+    if (g) g.items.push(f); else groups.push({ name: f.group, items: [f] });
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-4">
+      {groups.map(g => (
+        <div key={g.name} className="min-w-0 rounded-2xl border p-3.5 sm:p-4" style={{ borderColor: c.border, background: `${c.gold}06` }}>
+          <div className="text-[10px] font-bold uppercase tracking-[0.24em] mb-3 truncate" style={{ color: c.gold }}>{g.name}</div>
+          <div className="grid grid-cols-1 gap-3.5">
+            {g.items.map(f => {
+              const val = scriptValue(form, f.path);
+              const auto = form.scriptAuto?.[lang.code]?.[f.path];
+              const st = script.statusOf(f.path);
+              const edited = !!val.trim() && !!auto && val !== auto.out;
+              const props = {
+                c, lang: lang.code, value: val, placeholder: f.english,
+                'aria-label': `${g.name} — ${f.label} in ${lang.name}`,
+                style: { fontFamily: inputFont },
+              };
+              return (
+                <div key={f.path} className="min-w-0">
+                  <div className="flex items-baseline justify-between gap-3 mb-1.5 min-w-0">
+                    <span className="text-[12px] font-bold shrink-0" style={{ color: withAlpha(c.text, 0.82) }}>{f.label}</span>
+                    <span className="text-[11px] font-medium truncate min-w-0" style={{ color: c.subtext }} title={f.english}>{f.english}</span>
+                  </div>
+                  {f.multiline
+                    ? <Textarea {...props} rows={2} onChange={e => script.setValue(f.path, e.target.value)} />
+                    : <Input {...props} onChange={e => script.setValue(f.path, e.target.value)} />}
+                  {st === 'pending' && !val && (
+                    <div className="flex items-center gap-1.5 mt-1.5 text-[11px] font-medium" style={{ color: c.subtext }}>
+                      <Loader2 className="w-3 h-3 animate-spin" aria-hidden /> Converting to {lang.native}…
+                    </div>
+                  )}
+                  {st === 'failed' && !val && (
+                    <div role="status" className="flex items-start gap-1.5 mt-1.5 text-[11px] font-semibold leading-snug" style={{ color: UI_WARN }}>
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden />
+                      <span>Couldn’t convert this automatically — type it in {lang.native} yourself. Until then it prints in English.</span>
+                    </div>
+                  )}
+                  {edited && (
+                    <div className="flex items-center flex-wrap gap-x-2 mt-1.5 text-[11px] font-medium" style={{ color: c.subtext }}>
+                      <span>{auto && auto.src !== f.english ? 'The English changed since your edit — check this.' : 'Your own spelling.'}</span>
+                      <button type="button" onClick={() => script.resuggest(f.path)}
+                        className="font-bold underline underline-offset-2 min-h-[32px] focus-visible:outline-2" style={{ color: c.gold, outlineColor: c.gold }}>
+                        Suggest again
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ─── Step 0: Family ─────────────────────────────────────────────────────── */
-function StepFamily({ form, update, setForm, c, dark }: { form: FormState; update: (path: string, value: unknown) => void; setForm: React.Dispatch<React.SetStateAction<FormState>>; c: Palette; dark: boolean }) {
+function StepFamily({ form, update, setForm, c, dark, script }: { form: FormState; update: (path: string, value: unknown) => void; setForm: React.Dispatch<React.SetStateAction<FormState>>; c: Palette; dark: boolean; script: ScriptSuggestions }) {
+  const lang = langOf(form);
   const bothNamed = !!(form.bride.name.trim() && form.groom.name.trim());
-  const aboveName = form.aboveWeds === 'bride' ? form.bride.name : form.groom.name;
-  const belowName = form.aboveWeds === 'bride' ? form.groom.name : form.bride.name;
+  // As they print, so a Marathi card previews its Marathi names here.
+  const aboveName = scriptText(form, `${form.aboveWeds}.name`, form.aboveWeds === 'bride' ? form.bride.name : form.groom.name);
+  const belowSide = form.aboveWeds === 'bride' ? 'groom' : 'bride';
+  const belowName = scriptText(form, `${belowSide}.name`, form[belowSide].name);
   const abovePh = form.aboveWeds === 'bride' ? 'Bride' : 'Groom';
   const belowPh = form.aboveWeds === 'bride' ? 'Groom' : 'Bride';
-  const relation = RELATION_WORDS.find(r => r.id === form.relationWord)?.label || 'Weds';
+  const relation = relationText(form);
   const hosts = [
     { id: 'parents', label: 'Parents', emoji: '👨‍👩‍👧' },
     { id: 'grandparents', label: 'Grandparents', emoji: '👴👵' },
@@ -2100,6 +2262,13 @@ function StepFamily({ form, update, setForm, c, dark }: { form: FormState; updat
     <Section title="The Two Families" eyebrow="Step 1 of 8"
       subtitle="Only the two names are required — everything else is optional."
       c={c} icon={Heart}>
+
+      <div className="mb-8">
+        <LanguagePicker form={form} setForm={setForm} c={c}
+          note={lang.code === 'en'
+            ? 'Every word on the card prints in this language. Type names in English either way.'
+            : `Type in English as usual — the whole card prints in ${lang.native}, and your names are converted for you below.`} />
+      </div>
 
       <AnimatePresence initial={false}>
         {bothNamed && (
@@ -2126,6 +2295,16 @@ function StepFamily({ form, update, setForm, c, dark }: { form: FormState; updat
         <PersonCard side="Bride" person={form.bride} update={update} prefix="bride" c={c} />
         <PersonCard side="Groom" person={form.groom} update={update} prefix="groom" c={c} />
       </div>
+
+      {lang.code !== 'en' && (
+        <div className="mt-8">
+          <GroupHeading label={`Names in ${lang.name}`} note={lang.native} c={c} />
+          <p className="text-[12px] font-medium mb-4 leading-snug" style={{ color: c.subtext }}>
+            Converted from your English as you type. Check each spelling and correct it if needed — your corrections are kept.
+          </p>
+          <ScriptTextEditor form={form} script={script} c={c} />
+        </div>
+      )}
 
       {/* Order on the card */}
       <div className="mt-8">
@@ -2338,15 +2517,21 @@ function StepInvitation({ form, update, c, dark }: { form: FormState; update: (p
   const [search, setSearch] = useState('');
   const [cat, setCat] = useState('All');
   const cats = ['All', ...Array.from(new Set(INVITATION_TEMPLATES.map(t => t.category)))];
+  const lang = langOf(form);
+  const T = cardStrings(form);
+  const translated = lang.code !== 'en';
   const q = search.trim().toLowerCase();
   const filtered = INVITATION_TEMPLATES.filter(t =>
     (cat === 'All' || t.category === cat) &&
-    (!q || t.preview.toLowerCase().includes(q) || t.text.toLowerCase().includes(q))
+    (!q || t.preview.toLowerCase().includes(q) || t.text.toLowerCase().includes(q) || (T.templates[t.id] ?? '').toLowerCase().includes(q))
   );
   const countFor = (ct: string) => ct === 'All' ? INVITATION_TEMPLATES.length : INVITATION_TEMPLATES.filter(t => t.category === ct).length;
-  const aboveName = form.aboveWeds === 'bride' ? (form.bride.name || 'Bride') : (form.groom.name || 'Groom');
-  const belowName = form.aboveWeds === 'bride' ? (form.groom.name || 'Groom') : (form.bride.name || 'Bride');
-  const relation = RELATION_WORDS.find(r => r.id === form.relationWord)?.label || 'Weds';
+  const aboveSide = form.aboveWeds, belowSide = form.aboveWeds === 'bride' ? 'groom' : 'bride';
+  const aboveName = scriptText(form, `${aboveSide}.name`, form[aboveSide].name) || (aboveSide === 'bride' ? 'Bride' : 'Groom');
+  const belowName = scriptText(form, `${belowSide}.name`, form[belowSide].name) || (belowSide === 'bride' ? 'Bride' : 'Groom');
+  const relation = relationText(form);
+  // The English, small under a translated choice, so the studio can follow it.
+  const englishFill = (text: string) => text.replace(/\{bride\}/g, form.bride.name || '').replace(/\{groom\}/g, form.groom.name || '');
 
   return (
     <>
@@ -2403,12 +2588,17 @@ function StepInvitation({ form, update, c, dark }: { form: FormState; update: (p
                       )}
                     </div>
 
-                    <p className="whitespace-pre-line"
-                      style={{ fontFamily: form.design.bodyFont, fontSize: '0.95rem', lineHeight: 1.7, color: c.text, opacity: 0.9, fontStyle: 'italic' }}>
-                      {fillTemplate(t.text, form)}
+                    <p className="whitespace-pre-line" lang={lang.code}
+                      style={{ fontFamily: form.design.bodyFont, fontSize: '0.95rem', lineHeight: 1.7, color: c.text, opacity: 0.9, fontStyle: translated ? 'normal' : 'italic' }}>
+                      {fillTemplate(T.templates[t.id] ?? t.text, form)}
                     </p>
+                    {translated && (
+                      <p lang="en" className="whitespace-pre-line mt-2 text-[11px] leading-snug font-medium" style={{ color: c.subtext }}>
+                        {englishFill(t.text)}
+                      </p>
+                    )}
 
-                    <div className="mt-4 pt-3 text-center" style={{ borderTop: `1px solid ${c.border}` }}>
+                    <div lang={lang.code} className="mt-4 pt-3 text-center" style={{ borderTop: `1px solid ${c.border}` }}>
                       <div className="truncate leading-tight" style={{ fontFamily: form.design.headingFont, fontSize: '1.1rem', color: c.text }}>{aboveName}</div>
                       <div className="leading-none" style={{ fontFamily: form.design.scriptFont || "'Tangerine', cursive", fontSize: '1.4rem', color: c.gold }}>{relation}</div>
                       <div className="truncate leading-tight" style={{ fontFamily: form.design.headingFont, fontSize: '1.1rem', color: c.text }}>{belowName}</div>
@@ -2443,7 +2633,12 @@ function StepInvitation({ form, update, c, dark }: { form: FormState; update: (p
                     lineHeight: 1,
                     outlineColor: c.gold,
                   }}>
-                  {r.label}
+                  {translated ? (
+                    <span className="flex flex-col items-center gap-1 py-1.5 min-w-0">
+                      <span lang={lang.code}>{T.relationWords[r.id] ?? r.label}</span>
+                      <span lang="en" className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ fontFamily: 'Inter, sans-serif', color: c.subtext }}>{r.label}</span>
+                    </span>
+                  ) : r.label}
                 </motion.button>
               );
             })}
@@ -2710,8 +2905,18 @@ function StepProgrammes({ form, setForm, c }: { form: FormState; setForm: React.
 
 /* ─── Step 4: Extras ─────────────────────────────────────────────────────── */
 function StepExtras({ form, update, c }: { form: FormState; update: (path: string, value: unknown) => void; c: Palette }) {
-  const closing = CLOSING_TAGS.find(t => t.id === form.closingTag);
+  const closing = closingText(form);
   const kids = kidsLineText(form);
+  const lang = langOf(form);
+  const T = cardStrings(form);
+  // A choice's wording as it prints, with the English small beneath on a
+  // translated card so the studio can still follow which one is picked.
+  const choice = (printed: string, english: string) => (
+    <>
+      <span lang={lang.code} className="block text-[13px] leading-snug font-semibold" style={{ color: c.text }}>{printed}</span>
+      {lang.code !== 'en' && <span lang="en" className="block text-[11px] leading-snug font-medium mt-1" style={{ color: c.subtext }}>{english}</span>}
+    </>
+  );
 
   return (
     <>
@@ -2721,8 +2926,8 @@ function StepExtras({ form, update, c }: { form: FormState; update: (path: strin
 
         <div className="mb-6 px-5 py-5 rounded-2xl text-center" style={{ border: `1px dashed ${c.gold}66`, background: `${c.gold}0A` }}>
           <div className="text-[10px] font-bold uppercase tracking-[0.3em] mb-2" style={{ color: c.gold }}>On your card</div>
-          <div className="leading-snug" style={{ fontFamily: form.design.headingFont, fontSize: '1.2rem', color: closing ? c.text : c.subtext }}>
-            {closing ? closing.label : 'Choose a line below'}
+          <div lang={lang.code} className="leading-snug" style={{ fontFamily: form.design.headingFont, fontSize: '1.2rem', color: closing ? c.text : c.subtext }}>
+            {closing || 'Choose a line below'}
           </div>
         </div>
 
@@ -2730,7 +2935,7 @@ function StepExtras({ form, update, c }: { form: FormState; update: (path: strin
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {CLOSING_TAGS.map(t => (
             <OptionRow key={t.id} active={form.closingTag === t.id} onClick={() => update('closingTag', t.id)} c={c}>
-              <span className="block text-[13px] leading-snug font-semibold" style={{ color: c.text }}>{t.label}</span>
+              {choice(T.closingTags[t.id] ?? t.label, t.label)}
             </OptionRow>
           ))}
         </div>
@@ -2744,7 +2949,7 @@ function StepExtras({ form, update, c }: { form: FormState; update: (path: strin
             </OptionRow>
             {KIDS_LINES.map(t => (
               <OptionRow key={t.id} active={form.kidsLine === t.id} onClick={() => update('kidsLine', t.id)} c={c}>
-                <span className="block text-[13px] leading-snug font-semibold" style={{ color: c.text }}>{t.label}</span>
+                {choice(T.kidsLines[t.id] ?? t.label, t.label)}
               </OptionRow>
             ))}
             <OptionRow active={form.kidsLine === KIDS_CUSTOM} onClick={() => update('kidsLine', KIDS_CUSTOM)} c={c}>
@@ -2754,7 +2959,7 @@ function StepExtras({ form, update, c }: { form: FormState; update: (path: strin
           </div>
           {form.kidsLine === KIDS_CUSTOM && (
             <div className="mt-4">
-              <Field label="Your kids message" hint="printed exactly as typed" c={c}>
+              <Field label="Your kids message" hint={lang.code === 'en' ? 'printed exactly as typed' : `type in English — converted to ${lang.native} for you`} c={c}>
                 <Textarea c={c} rows={2} value={form.kidsCustom} onChange={e => update('kidsCustom', e.target.value)}
                   placeholder="e.g. Aarav & Myra are waiting to meet you 😊" />
               </Field>
@@ -2762,7 +2967,7 @@ function StepExtras({ form, update, c }: { form: FormState; update: (path: strin
           )}
           {kids && (
             <div className="mt-4 px-4 py-3 rounded-2xl text-center" style={{ background: `${c.gold}12`, border: `1px solid ${c.border}` }}>
-              <span className="text-[12px] font-medium italic" style={{ color: c.text }}>{kids}</span>
+              <span lang={lang.code} className="text-[12px] font-medium italic" style={{ color: c.text }}>{kids}</span>
             </div>
           )}
         </Section>
@@ -2784,30 +2989,38 @@ function StepExtras({ form, update, c }: { form: FormState; update: (path: strin
 }
 
 /* ─── Step 5: Design ─────────────────────────────────────────────────────── */
-function StepDesign({ form, update, c, dark }: { form: FormState; update: (path: string, value: unknown) => void; c: Palette; dark: boolean }) {
+function StepDesign({ form, update, setForm, c, dark }: { form: FormState; update: (path: string, value: unknown) => void; setForm: React.Dispatch<React.SetStateAction<FormState>>; c: Palette; dark: boolean }) {
   const [search, setSearch] = useState('');
   const [cat, setCat] = useState('All');
   const [target, setTarget] = useState('heading');
+  const [showAllFonts, setShowAllFonts] = useState(false);
+  const lang = langOf(form);
+  const latin = lang.code === 'en';
   const cats = ['All', ...Array.from(new Set(FONTS.map(f => f.cat)))];
-  // Deliberately no language restriction. This used to also require
-  // `f.langs.includes('English')`, which hid every Devanagari and Gujarati face
-  // — nine fonts that were still downloaded on every page view yet could never
-  // be picked. Filtering on `form.design.language` instead would not help: no
-  // UI writes it (it is always 'English'), and even with a selector, a couple's
-  // Latin-script names often want a Latin font on an otherwise Hindi card. All
-  // these faces include Latin glyphs, so their name previews render properly.
-  const filtered = FONTS.filter(f => (cat === 'All' || f.cat === cat) && f.name.toLowerCase().includes(search.toLowerCase()));
+  // An English card lists every face. Any other card lists only the faces that
+  // carry its script — one that doesn't would print in the browser's fallback —
+  // unless the customer asks for all of them, and even then those come first.
+  const fits = (fam: string) => fontHasScript(fam, lang.script);
+  const matching = FONTS.filter(f => (cat === 'All' || f.cat === cat) && f.name.toLowerCase().includes(search.toLowerCase()));
+  const filtered = latin ? matching
+    : showAllFonts ? [...matching.filter(f => fits(f.family)), ...matching.filter(f => !fits(f.family))]
+      : matching.filter(f => fits(f.family));
+  const scriptCount = FONTS.filter(f => fits(f.family)).length;
 
   const targetKey: 'headingFont' | 'bodyFont' | 'scriptFont' = target === 'heading' ? 'headingFont' : target === 'body' ? 'bodyFont' : 'scriptFont';
   const currentFamily = form.design[targetKey];
   const currentName = FONTS.find(f => f.family === currentFamily)?.name || 'Custom';
 
-  const aboveName = form.aboveWeds === 'bride' ? (form.bride.name || 'Aditi Sharma') : (form.groom.name || 'Rohan Mehta');
-  const belowName = form.aboveWeds === 'bride' ? (form.groom.name || 'Rohan Mehta') : (form.bride.name || 'Aditi Sharma');
-  const relation = RELATION_WORDS.find(r => r.id === form.relationWord)?.label || 'Weds';
-  const sampleText = target === 'heading' ? (form.bride.name || 'Aditi Sharma')
+  // Samples in the card's own language, since that is what the fonts must set.
+  const nameOf = (side: 'bride' | 'groom', fallback: string) => scriptText(form, `${side}.name`, form[side].name) || fallback;
+  const aboveName = form.aboveWeds === 'bride' ? nameOf('bride', 'Aditi Sharma') : nameOf('groom', 'Rohan Mehta');
+  const belowName = form.aboveWeds === 'bride' ? nameOf('groom', 'Rohan Mehta') : nameOf('bride', 'Aditi Sharma');
+  const relation = relationText(form);
+  const firstLine = templateText(form, form.selectedTemplate).split('\n').map(l => l.trim()).find(Boolean);
+  const bodySample = latin ? 'Request the honour of your presence' : (firstLine || 'Request the honour of your presence');
+  const sampleText = target === 'heading' ? nameOf('bride', 'Aditi Sharma')
     : target === 'script' ? relation
-      : 'Request the honour of your presence';
+      : bodySample;
 
   const tabs = [
     { k: 'heading', l: 'Headings', help: 'The two names', fam: form.design.headingFont },
@@ -2821,15 +3034,15 @@ function StepDesign({ form, update, c, dark }: { form: FormState; update: (path:
       {/* Live sample */}
       <div className="mb-7 rounded-2xl border px-5 py-6 text-center overflow-hidden" style={{ borderColor: c.border, background: `${c.gold}09` }}>
         <div className="text-[10px] font-bold uppercase tracking-[0.3em] mb-4" style={{ color: c.gold }}>Live sample</div>
-        <div style={{
+        <div lang={lang.code} style={{
           fontFamily: form.design.bodyFont,
           fontSize: `${form.design.fontSize}px`,
           letterSpacing: `${form.design.letterSpacing}px`,
           lineHeight: form.design.lineHeight,
           color: c.text,
         }}>
-          <p className="italic max-w-sm mx-auto" style={{ fontSize: '0.86em', opacity: 0.78 }}>
-            Request the pleasure of your company at the wedding celebration of
+          <p className={`max-w-sm mx-auto ${latin ? 'italic' : ''}`} style={{ fontSize: '0.86em', opacity: 0.78 }}>
+            {latin ? 'Request the pleasure of your company at the wedding celebration of' : bodySample}
           </p>
           <div className="mt-4 leading-tight break-words" style={{ fontFamily: form.design.headingFont, fontSize: '1.9em' }}>{aboveName}</div>
           <div className="leading-none my-1" style={{ fontFamily: form.design.scriptFont || "'Tangerine', cursive", fontSize: '2.1em', color: c.gold }}>{relation}</div>
@@ -2857,6 +3070,12 @@ function StepDesign({ form, update, c, dark }: { form: FormState; update: (path:
         </div>
       </div>
 
+      {/* Language, right above the fonts it decides */}
+      <div className="mb-8">
+        <LanguagePicker form={form} setForm={setForm} c={c}
+          note={latin ? undefined : `Fonts below are the ones with ${lang.native} letters. Changing the language swaps any font that can't print it.`} />
+      </div>
+
       {/* Font picker */}
       <GroupHeading label="Fonts" note={currentName} c={c} />
       <div className="rounded-2xl border overflow-hidden" style={{ borderColor: c.border }}>
@@ -2868,7 +3087,7 @@ function StepDesign({ form, update, c, dark }: { form: FormState; update: (path:
                 className="min-h-[64px] rounded-xl px-2 py-2 transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-2"
                 style={{ background: on ? c.surface : 'transparent', border: `1px solid ${on ? c.gold : 'transparent'}`, outlineColor: c.gold }}>
                 <div className="text-[10px] font-bold uppercase tracking-[0.14em]" style={{ color: on ? c.goldDeep : c.subtext }}>{t.l}</div>
-                <div className="truncate leading-tight mt-0.5" style={{ fontFamily: t.fam, fontSize: '1.15rem', color: c.text }}>Abc</div>
+                <div className="truncate leading-tight mt-0.5" style={{ fontFamily: t.fam, fontSize: '1.15rem', color: c.text }} lang={lang.code}>{latin ? 'Abc' : lang.native}</div>
                 <div className="text-[9px] font-medium truncate" style={{ color: c.subtext, opacity: 0.75 }}>{t.help}</div>
               </button>
             );
@@ -2885,8 +3104,19 @@ function StepDesign({ form, update, c, dark }: { form: FormState; update: (path:
           </Select>
         </div>
 
+        {!latin && (
+          <div className="flex items-center justify-between gap-3 flex-wrap px-3 py-2.5 border-t" style={{ borderColor: c.border }}>
+            <span className="text-[11px] font-medium min-w-0" style={{ color: c.subtext }}>
+              {showAllFonts ? `All fonts — ${lang.native} ones first` : `${scriptCount} fonts with ${lang.native} letters`}
+            </span>
+            <FilterChip label={showAllFonts ? `Only ${lang.name}` : 'Show all fonts'} active={showAllFonts} onClick={() => setShowAllFonts(v => !v)} c={c} />
+          </div>
+        )}
+
         {filtered.length === 0 ? (
-          <div className="text-center py-10 px-6 text-[13px] font-semibold" style={{ color: c.subtext }}>No fonts match that search.</div>
+          <div className="text-center py-10 px-6 text-[13px] font-semibold" style={{ color: c.subtext }}>
+            {!latin && !showAllFonts && !search && cat === 'All' ? `No ${lang.name} fonts available yet — tap "Show all fonts".` : 'No fonts match that search.'}
+          </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[340px] overflow-y-auto p-3 border-t" style={{ borderColor: c.border, scrollbarWidth: 'thin' }}>
             {filtered.map(f => {
@@ -2897,11 +3127,12 @@ function StepDesign({ form, update, c, dark }: { form: FormState; update: (path:
                   className="flex items-center justify-between gap-2 p-3.5 rounded-2xl border text-left min-h-[76px] transition-colors duration-300 focus-visible:outline-2 focus-visible:outline-offset-2"
                   style={{ borderColor: active ? c.gold : c.border, background: active ? `${c.gold}12` : 'transparent', outlineColor: c.gold }}>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate" style={{ fontFamily: f.family, fontSize: '1.5rem', color: c.text, lineHeight: 1.25 }}>{sampleText}</div>
-                    <div className="text-[10px] mt-1 flex items-center gap-2 uppercase tracking-[0.12em]" style={{ color: c.subtext }}>
+                    <div lang={lang.code} className="truncate" style={{ fontFamily: f.family, fontSize: '1.5rem', color: c.text, lineHeight: 1.25 }}>{sampleText}</div>
+                    <div className="text-[10px] mt-1 flex items-center gap-2 uppercase tracking-[0.12em] min-w-0" style={{ color: c.subtext }}>
                       <span className="font-bold truncate">{f.name}</span>
                       <span className="opacity-45">·</span>
-                      <span className="opacity-80">{f.cat}</span>
+                      <span className="opacity-80 shrink-0">{f.cat}</span>
+                      {!latin && !fits(f.family) && <span className="shrink-0 font-bold" style={{ color: UI_WARN }}>No {lang.name}</span>}
                     </div>
                   </div>
                   {active && <Check className="w-4 h-4 shrink-0" strokeWidth={3} style={{ color: c.gold }} />}
@@ -3103,8 +3334,10 @@ function SliderField({ label, value, min, max, step, unit, onChange, c }: { labe
 }
 
 /* ─── Step 6: Preview ────────────────────────────────────────────────────── */
-function StepPreview({ form, update, c, dark }: { form: FormState; update: (path: string, value: unknown) => void; c: Palette; dark: boolean }) {
+function StepPreview({ form, update, c, dark, script }: { form: FormState; update: (path: string, value: unknown) => void; c: Palette; dark: boolean; script: ScriptSuggestions }) {
   const wide = form.preview.device !== 'mobile';
+  const lang = langOf(form);
+  const missing = scriptFields(form).filter(f => !scriptValue(form, f.path).trim()).length;
   const stageBg = dark
     ? 'linear-gradient(165deg, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.34) 100%)'
     : `linear-gradient(165deg, ${c.ink}16 0%, ${c.ink}08 100%)`;
@@ -3141,23 +3374,40 @@ function StepPreview({ form, update, c, dark }: { form: FormState; update: (path
       <div className="mt-3 text-center text-[10px] font-bold uppercase tracking-[0.24em]" style={{ color: c.subtext }}>
         Shown at true print proportions
       </div>
+
+      {missing > 0 && (
+        <div className="mt-6 rounded-2xl border p-4" style={{ borderColor: withAlpha(UI_WARN, 0.45), background: withAlpha(UI_WARN, 0.06) }}>
+          <div className="flex items-start gap-2 mb-3">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" style={{ color: UI_WARN }} aria-hidden />
+            <div className="text-[13px] font-bold leading-snug" style={{ color: c.text }}>
+              {missing === 1 ? '1 entry is' : `${missing} entries are`} still in English on this {lang.name} card
+              <span className="block text-[11px] font-medium mt-0.5" style={{ color: c.subtext }}>Type {missing === 1 ? 'it' : 'them'} in {lang.native} below, or leave as is to print the English.</span>
+            </div>
+          </div>
+          <ScriptTextEditor form={form} script={script} c={c} onlyMissing />
+        </div>
+      )}
     </Section>
   );
 }
 
 /* ─── Step 7: Submit ─────────────────────────────────────────────────────── */
-function StepSubmit({ form, update, c, onSubmit, setStep, submitting }: { form: FormState; update: (path: string, value: unknown) => void; c: Palette; onSubmit: () => void; setStep: (n: number) => void; submitting?: boolean }) {
+function StepSubmit({ form, update, c, onSubmit, setStep, submitting, script }: { form: FormState; update: (path: string, value: unknown) => void; c: Palette; onSubmit: () => void; setStep: (n: number) => void; submitting?: boolean; script: ScriptSuggestions }) {
   const template = INVITATION_TEMPLATES.find(t => t.id === form.selectedTemplate);
   const closing = CLOSING_TAGS.find(t => t.id === form.closingTag);
+  const lang = langOf(form);
+  const fields = scriptFields(form);
+  const missing = fields.filter(f => !scriptValue(form, f.path).trim()).length;
   const sections = [
+    { label: 'Card Language', step: 0, value: lang.code === 'en' ? 'English' : `${lang.name} · ${lang.native}`, icon: MessageCircle, ok: true },
     { label: 'Bride & Groom', step: 0, value: `${form.bride.name || '—'} & ${form.groom.name || '—'}`, icon: Heart, ok: !!(form.bride.name && form.groom.name) },
     { label: 'Card Order', step: 0, value: form.aboveWeds === 'bride' ? 'Bride above Weds' : 'Groom above Weds', icon: ArrowLeftRight, ok: true },
     { label: 'Deities', step: 1, value: `${form.deities.length} selected`, icon: Star, ok: form.deities.length > 0 },
     { label: 'Template', step: 2, value: template ? `#${template.id} · ${template.category}` : 'Not selected', icon: BookOpen, ok: !!template },
     { label: 'Programmes', step: 3, value: `${form.programmes.filter(p => p.date).length} with dates`, icon: Calendar, ok: form.programmes.some(p => p.date) && !form.programmes.some(p => isPastDate(p.date)) },
     { label: 'Programme Pages', step: 3, value: separateSheets(form) ? `Separate page for each function (${form.programmes.filter(p => p.date).length + 1} pages)` : 'All on one page', icon: Copy, ok: true },
-    { label: 'Closing Line', step: 4, value: closing?.label || '—', icon: FileText, ok: true },
-    { label: 'Design', step: 5, value: `${form.design.language} · ${form.design.layout}`, icon: Type, ok: true },
+    { label: 'Closing Line', step: 4, value: closing ? closingText(form) : '—', icon: FileText, ok: true },
+    { label: 'Design', step: 5, value: `${lang.name} · ${form.design.layout}`, icon: Type, ok: true },
     { label: 'Card Size', step: 5, value: `${cardSizeName(form.design.cardSize)} · ${cardSizeText(form.design.cardSize)}`, icon: Maximize2, ok: isValidCardSize(form.design.cardSize) },
   ];
   const pending = sections.filter(s => !s.ok).length;
@@ -3208,6 +3458,17 @@ function StepSubmit({ form, update, c, onSubmit, setStep, submitting }: { form: 
           );
         })}
       </div>
+
+      {/* The script versions, for a last read: everything typed on later steps
+          (venues, compliments) was converted without the customer seeing it. */}
+      {lang.code !== 'en' && fields.length > 0 && (
+        <div className="mt-7">
+          <GroupHeading label={`Names in ${lang.name}`} note={missing ? `${missing} still in English` : `${fields.length} ready`} c={c} />
+          <Disclosure label={`Check the ${lang.native} spellings`} hint={missing ? `${missing} to fill` : 'All converted'} defaultOpen={missing > 0} c={c}>
+            <div className="pt-1"><ScriptTextEditor form={form} script={script} c={c} /></div>
+          </Disclosure>
+        </div>
+      )}
 
       {/* Confirmation */}
       <div className="mt-7">
@@ -3271,17 +3532,30 @@ function ZoomControls({ zoom, setZoom, c, onDark = false, className = '' }: {
 /* ─── Card Preview ───────────────────────────────────────────────────────── */
 function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; dark: boolean; compact?: boolean }) {
   const layout = form.design.layout;
-  const template = INVITATION_TEMPLATES.find(t => t.id === form.selectedTemplate);
-  const closing = CLOSING_TAGS.find(t => t.id === form.closingTag);
+  // Every word below is in the card's language: fixed wording from
+  // cardStrings(), the customer's own values through scriptText().
+  const lang = langOf(form);
+  const L = cardStrings(form).labels;
+  const latin = isLatinCard(form);
+  const template = templateText(form, form.selectedTemplate);
+  const closing = closingText(form);
   const kidsLine = kidsLineText(form);
-  const relation = RELATION_WORDS.find(r => r.id === form.relationWord);
+  const relation = relationText(form);
   const hasNames = !!(form.bride.name || form.groom.name);
 
   // Respect aboveWeds
-  const above = form.aboveWeds === 'bride' ? form.bride : form.groom;
-  const below = form.aboveWeds === 'bride' ? form.groom : form.bride;
-  const aboveRelation = form.aboveWeds === 'bride' ? 'D/o' : 'S/o';
-  const belowRelation = form.aboveWeds === 'bride' ? 'S/o' : 'D/o';
+  const aboveSide = form.aboveWeds;
+  const belowSide = form.aboveWeds === 'bride' ? 'groom' : 'bride';
+  const above = form[aboveSide];
+  const below = form[belowSide];
+  const aboveRelation = aboveSide === 'bride' ? L.daughterOf : L.sonOf;
+  const belowRelation = belowSide === 'bride' ? L.daughterOf : L.sonOf;
+  const nm = (side: 'bride' | 'groom') => scriptText(form, `${side}.name`, form[side].name);
+  const pName = (side: 'bride' | 'groom', role: 'father' | 'mother' | 'grandfather' | 'grandmother') => personName(form, side, role);
+  const pair = (a: string, b: string) => (a && b ? `${a}${L.and}${b}` : a || b);
+  // Tracked capitals suit Latin; Indic scripts have no case, and spacing their
+  // letters apart breaks up the joined forms of a word.
+  const tracked = (em: string): React.CSSProperties => (latin ? { letterSpacing: em } : { letterSpacing: 0 });
 
   // Every page is exactly the card's trim size; FittedSheet scales the matter to
   // fit it. An out-of-range size can't be stored by the picker, but an order is
@@ -3343,72 +3617,70 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
       {/* Host parents line */}
       {form.hostType === 'parents' && (above.fatherName || above.motherName || below.fatherName || below.motherName) && (
         <div className="text-[11px] mb-2 font-semibold" style={{ color: '#1A1A1A' }}>
-          {pn(above.motherPrefix, above.motherName) || pn(below.motherPrefix, below.motherName) || ''}
-          {((above.motherName || below.motherName) && (above.fatherName || below.fatherName)) ? ' & ' : ''}
-          {pn(above.fatherPrefix, above.fatherName) || pn(below.fatherPrefix, below.fatherName) || ''}
+          {pair(pName(aboveSide, 'mother') || pName(belowSide, 'mother'), pName(aboveSide, 'father') || pName(belowSide, 'father'))}
         </div>
       )}
 
       {/* Template */}
       {template && (
-        <p className="mb-5 italic opacity-80 max-w-md mx-auto whitespace-pre-line" style={{ fontSize: '0.88em', fontFamily: form.design.bodyFont, lineHeight: 1.6 }}>
-          {fillTemplate(template.text, form).replace(/\n\n\n/g, '\n\n')}
+        <p className={`mb-5 opacity-80 max-w-md mx-auto whitespace-pre-line ${latin ? 'italic' : ''}`} style={{ fontSize: '0.88em', fontFamily: form.design.bodyFont, lineHeight: 1.6 }}>
+          {template.replace(/\n\n\n/g, '\n\n')}
         </p>
       )}
 
       {/* Names */}
       <div className="my-5">
         <div className="font-medium leading-tight mb-1" style={{ fontFamily: form.design.headingFont, fontSize: compact ? '1.7em' : '2.5em', color: '#111111' }}>
-          {above.name || <span className="opacity-30 italic" style={{ fontSize: '0.7em' }}>Name</span>}
+          {nm(aboveSide) || <span className="opacity-30 italic" style={{ fontSize: '0.7em' }}>Name</span>}
         </div>
         {(above.fatherName || above.motherName) && (
           <div className="text-[10px] opacity-70 font-semibold mt-0.5">
-            {aboveRelation} {pn(above.fatherPrefix, above.fatherName)}{above.fatherName && above.motherName ? ' & ' : ''}{pn(above.motherPrefix, above.motherName)}
+            {aboveRelation} {pair(pName(aboveSide, 'father'), pName(aboveSide, 'mother'))}
           </div>
         )}
         {above.grandfatherName && (
-          <div className="text-[10px] opacity-55 mt-0.5">{pn(above.grandfatherPrefix, above.grandfatherName)}{above.grandfatherName && above.grandmotherName ? ' & ' : ''}{pn(above.grandmotherPrefix, above.grandmotherName)}</div>
+          <div className="text-[10px] opacity-55 mt-0.5">{pair(pName(aboveSide, 'grandfather'), pName(aboveSide, 'grandmother'))}</div>
         )}
 
         <div className="my-4 relative">
-          <div style={{ fontFamily: form.design.scriptFont || "'Tangerine', cursive", fontSize: compact ? '2.2em' : '3.2em', color: '#1A1A1A', lineHeight: 0.9 }}>
-            {relation?.label || 'Weds'}
+          <div style={{ fontFamily: form.design.scriptFont || "'Tangerine', cursive", fontSize: compact ? '2.2em' : '3.2em', color: '#1A1A1A', lineHeight: latin ? 0.9 : 1.25 }}>
+            {relation}
           </div>
           <div className="absolute left-1/2 -translate-x-1/2 -bottom-1 w-14 h-px" style={{ background: '#C0892E' }} />
         </div>
 
         <div className="font-medium leading-tight mb-1 mt-2" style={{ fontFamily: form.design.headingFont, fontSize: compact ? '1.7em' : '2.5em', color: '#111111' }}>
-          {below.name || <span className="opacity-30 italic" style={{ fontSize: '0.7em' }}>Name</span>}
+          {nm(belowSide) || <span className="opacity-30 italic" style={{ fontSize: '0.7em' }}>Name</span>}
         </div>
         {(below.fatherName || below.motherName) && (
           <div className="text-[10px] opacity-70 font-semibold mt-0.5">
-            {belowRelation} {pn(below.fatherPrefix, below.fatherName)}{below.fatherName && below.motherName ? ' & ' : ''}{pn(below.motherPrefix, below.motherName)}
+            {belowRelation} {pair(pName(belowSide, 'father'), pName(belowSide, 'mother'))}
           </div>
         )}
         {below.grandfatherName && (
-          <div className="text-[10px] opacity-55 mt-0.5">{pn(below.grandfatherPrefix, below.grandfatherName)}{below.grandfatherName && below.grandmotherName ? ' & ' : ''}{pn(below.grandmotherPrefix, below.grandmotherName)}</div>
+          <div className="text-[10px] opacity-55 mt-0.5">{pair(pName(belowSide, 'grandfather'), pName(belowSide, 'grandmother'))}</div>
         )}
       </div>
 
       {form.family.residenceAddress && (
         <div className="mt-5 pt-4 text-[10px]" style={{ borderTop: '1px solid rgba(0, 0, 0, 0.10)' }}>
-          <div className="font-bold mb-0.5" style={{ color: '#1A1A1A' }}>Residence:</div>
-          <div className="opacity-65">{form.family.residenceAddress}</div>
+          <div className="font-bold mb-0.5" style={{ color: '#1A1A1A' }}>{L.residence}</div>
+          <div className="opacity-65">{scriptText(form, 'family.residenceAddress', form.family.residenceAddress)}</div>
         </div>
       )}
       {form.withCompliments && (
         <div className="mt-3 text-[10px]">
-          <div className="font-bold mb-0.5" style={{ color: '#1A1A1A' }}>With Best Compliments:</div>
-          <div className="opacity-65">{form.withCompliments}</div>
+          <div className="font-bold mb-0.5" style={{ color: '#1A1A1A' }}>{L.withCompliments}</div>
+          <div className="opacity-65">{scriptText(form, 'withCompliments', form.withCompliments)}</div>
         </div>
       )}
       {kidsLine && (
         <div className="mt-4 px-3 py-2 rounded-lg" style={{ background: 'rgba(192, 137, 46, 0.12)' }}>
-          <div className="text-[10px] italic font-medium" style={{ color: '#1A1A1A' }}>{kidsLine}</div>
+          <div className={`text-[10px] font-medium ${latin ? 'italic' : ''}`} style={{ color: '#1A1A1A' }}>{kidsLine}</div>
         </div>
       )}
       {closing && (
-        <div className="mt-4 text-[10px] font-bold tracking-[0.28em]" style={{ color: '#1A1A1A' }}>✦ {closing.label.toUpperCase()} ✦</div>
+        <div className="mt-4 text-[10px] font-bold" style={{ color: '#1A1A1A', ...tracked('0.28em') }}>✦ {latin ? closing.toUpperCase() : closing} ✦</div>
       )}
       <div className="mt-4 flex justify-center">
         <svg width="40" height="12" viewBox="0 0 40 12" fill="#C0892E" opacity="0.6">
@@ -3424,23 +3696,23 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
     <div className={`relative ${compact ? 'p-5 pt-6' : 'p-7 sm:p-10 pt-8'} text-center`}
       style={{ fontFamily: form.design.bodyFont, fontSize: `${form.design.fontSize}px`, letterSpacing: `${form.design.letterSpacing}px`, lineHeight: form.design.lineHeight }}>
       <DecorativeDivider compact={compact} mini />
-      <div className="text-[10px] font-bold mb-3 mt-2" style={{ color: '#1A1A1A', letterSpacing: '0.4em', fontFamily: form.design.headingFont }}>◈ PROGRAMMES ◈</div>
+      <div className="text-[10px] font-bold mb-3 mt-2" style={{ color: '#1A1A1A', ...tracked('0.4em'), fontFamily: form.design.headingFont }}>◈ {latin ? L.programmes.toUpperCase() : L.programmes} ◈</div>
       <div className="grid grid-cols-1 gap-2">
         {datedProgrammes.map(f => {
           const preset = PROGRAMME_PRESETS.find(p => p.id === f.preset);
-          const when = progWhen(f);
+          const when = progWhen(f, false, form);
           return (
             <div key={f.id} className="rounded-xl p-2.5 text-left" style={{ background: `linear-gradient(135deg, ${preset?.color || '#C0892E'}12, transparent)`, border: `1px solid ${preset?.color || '#C0892E'}28` }}>
               <div className="flex items-start gap-2">
                 <div className="text-lg shrink-0">{preset?.icon || '✨'}</div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-bold leading-tight" style={{ fontFamily: form.design.headingFont, fontSize: '1em', color: '#1A1A1A' }}>{f.name}</div>
+                  <div className="font-bold leading-tight" style={{ fontFamily: form.design.headingFont, fontSize: '1em', color: '#1A1A1A' }}>{programmeName(form, f)}</div>
                   <div className="text-[10px] mt-0.5 font-semibold">
                     {when.date}
                     {when.time ? <span className="opacity-65"> · {when.time}</span> : null}
                   </div>
-                  {f.venue && <div className="text-[10px] font-bold mt-0.5" style={{ color: '#1A1A1A' }}>{f.venue}</div>}
-                  {f.address && <div className="text-[10px] opacity-65 mt-0.5 leading-tight">{f.address}</div>}
+                  {f.venue && <div className="text-[10px] font-bold mt-0.5" style={{ color: '#1A1A1A' }}>{scriptText(form, `programme.${f.id}.venue`, f.venue)}</div>}
+                  {f.address && <div className="text-[10px] opacity-65 mt-0.5 leading-tight">{scriptText(form, `programme.${f.id}.address`, f.address)}</div>}
                 </div>
               </div>
             </div>
@@ -3538,7 +3810,7 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
   const paper = (children: React.ReactNode, label: string, showLabel: boolean, extraDecor?: React.ReactNode) => (
     <div>
       {showLabel && (
-        <div className="flex items-center gap-2 mb-2 px-0.5">
+        <div lang="en" className="flex items-center gap-2 mb-2 px-0.5">
           <span className="text-[9px] font-bold uppercase tracking-[0.3em] shrink-0" style={{ color: c.gold }}>{label}</span>
           <div className="h-px flex-1" style={{ background: `linear-gradient(90deg, ${c.gold}55, transparent)` }} />
         </div>
@@ -3565,7 +3837,9 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
   const hasTwoPages = !!pageProgrammes || separate;
 
   return (
-    <div className="@container space-y-5">
+    // `lang` gives the browser the right shaping, line breaking and hyphenation
+    // for the card's script; the screen-only page labels set their own.
+    <div className="@container space-y-5" lang={lang.code}>
       {paper(pageContent, 'Page 1 · Invitation', hasTwoPages)}
       {pageProgrammes && paper(pageProgrammes, 'Page 2 · Programmes', true)}
       {/* Keyed wrappers: paper() has no key of its own, and the sheet list

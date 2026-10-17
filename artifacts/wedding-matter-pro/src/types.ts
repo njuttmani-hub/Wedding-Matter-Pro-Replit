@@ -84,6 +84,12 @@ export interface FormState {
    *  switching Marathi → Gujarati → Marathi doesn't lose their corrections.
    *  Read it through scriptText() in lib/cardText.ts. Absent on older forms. */
   scriptText?: Record<string, Record<string, string>>;
+  /** The last transliteration suggested for each scriptText entry, with the
+   *  English it came from, same keys as scriptText. A scriptText value still
+   *  equal to its `out` is untouched by the customer, so it may be replaced
+   *  when the English changes; anything else is their edit and is left alone.
+   *  Bookkeeping only, never printed. Absent on older forms. */
+  scriptAuto?: Record<string, Record<string, { src: string; out: string }>>;
   design: {
     /** A LangCode from data/languages.ts ('en', 'mr' …). Older forms hold
      *  'English'; read it through langOf() in lib/cardText.ts. */
