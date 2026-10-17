@@ -4476,11 +4476,16 @@ async function cardPdfFile(pages: CardCanvas[], base: string): Promise<File | nu
     // jsPDF swaps the format's sides to match `orientation`, so it has to agree with them.
     const orientation = widthIn > heightIn ? 'l' : 'p';
     if (!doc) {
-      doc = new jsPDF({ orientation, unit: 'in', format: [widthIn, heightIn] });
+      doc = new jsPDF({ orientation, unit: 'in', format: [widthIn, heightIn], compress: true });
     } else {
       doc.addPage([widthIn, heightIn], orientation);
     }
-    doc.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, widthIn, heightIn);
+    // JPEG, not PNG: jsPDF stores a PNG as raw uncompressed pixels (~12 MB a
+    // page at print resolution, 60 MB for a 5-page card), which older
+    // importers such as CorelDRAW X4 choke on and report as corrupt. A JPEG
+    // (DCTDecode) page is ~0.5 MB and readable by every PDF consumer. The
+    // card is opaque white, so dropping alpha loses nothing.
+    doc.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, widthIn, heightIn, undefined, 'NONE');
   }
   return doc ? new File([doc.output('blob')], `${base}.pdf`, { type: 'application/pdf' }) : null;
 }
