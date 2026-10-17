@@ -22,6 +22,11 @@ export default defineConfig({
     },
     dedupe: ["react", "react-dom"],
   },
+  // harfbuzzjs locates its .wasm with `new URL(..., import.meta.url)`, which
+  // dependency pre-bundling would break; served as-is, Vite resolves it.
+  optimizeDeps: {
+    exclude: ["harfbuzzjs"],
+  },
   root: path.resolve(import.meta.dirname),
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),

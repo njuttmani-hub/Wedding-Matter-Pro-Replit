@@ -73,6 +73,8 @@
     "zod": "catalog:"
   },
   "dependencies": {
+    "docx": "^9.11.0",
+    "harfbuzzjs": "^1.6.3",
     "html2canvas-pro": "^2.5.2"
   }
 }

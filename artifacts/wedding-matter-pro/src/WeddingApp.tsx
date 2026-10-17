@@ -21,6 +21,8 @@ import { CARD_LANGUAGES } from './data/languages';
 import { langOf, cardStrings, scriptText, cardDate, cardTime, childOf } from './lib/cardText';
 import { scriptFields, scriptValue, isLatinCard, personName, programmeName, fontHasScript, withLanguage, type ScriptField } from './lib/scriptFields';
 import { useScriptSuggestions, type ScriptSuggestions } from './lib/useScriptSuggestions';
+import { fontsUsed, familyName } from './lib/fontsUsed';
+import type { CardMatter } from './lib/docxExport';
 
 /* ─── Storage keys ───────────────────────────────────────────────────────── */
 const DRAFT_KEY = 'wmp_draft_v3';
@@ -569,6 +571,113 @@ function generateCorelText(form: FormState): string {
   if (closing) s += `\n─── CLOSING TAG ───\n[${closing.id.toUpperCase()}] ${closingText(form)}\n`;
   return s;
 }
+
+/** The card's matter as the Word export lays it out: page 1, then the
+ *  programmes page or one sheet per function, then a details page for the
+ *  studio. Worded by the same helpers as CardPreview and generateCorelText,
+ *  so the three never drift; lib/docxExport.ts only sets type. `order` adds
+ *  the order's own details when there is one. */
+function cardMatter(form: FormState, order?: { orderId: string; at: string; status?: string }): CardMatter {
+  const lang = langOf(form);
+  const L = cardStrings(form).labels;
+  const aboveSide = form.aboveWeds;
+  const belowSide = form.aboveWeds === 'bride' ? 'groom' : 'bride';
+  const pair = (a: string, b: string) => (a && b ? `${a}${L.and}${b}` : a || b);
+  // Exactly the lines CardPreview prints under each name.
+  const person = (side: 'bride' | 'groom') => {
+    const p = form[side];
+    return {
+      name: scriptText(form, `${side}.name`, p.name),
+      childOf: p.fatherName || p.motherName ? childOf(form, side, pair(personName(form, side, 'father'), personName(form, side, 'mother'))) : '',
+      grandparents: p.grandfatherName ? pair(personName(form, side, 'grandfather'), personName(form, side, 'grandmother')) : '',
+    };
+  };
+  const hostLine = form.hostType === 'parents'
+    ? pair(personName(form, aboveSide, 'mother') || personName(form, belowSide, 'mother'), personName(form, aboveSide, 'father') || personName(form, belowSide, 'father'))
+    : '';
+  const dated = form.programmes.filter(f => f.date);
+  const separate = separateSheets(form);
+  const size = isValidCardSize(form.design.cardSize) ? form.design.cardSize : DEFAULT_CARD_SIZE;
+  const template = INVITATION_TEMPLATES.find(t => t.id === form.selectedTemplate);
+  const typed = (path: string, v: string) => (v.trim() ? scriptText(form, path, v.trim()) : '');
+  const couple = [form.bride.name, form.groom.name].filter(Boolean).join(' & ');
+
+  const details: [string, string][] = [];
+  if (order) {
+    details.push(['Order', order.orderId], ['Submitted', order.at]);
+    if (order.status) details.push(['Status', order.status]);
+  }
+  details.push(
+    ['Bride', form.bride.name || '—'],
+    ['Groom', form.groom.name || '—'],
+    ['Card size', `${cardSizeName(size)}: ${cardSizeText(size)}`],
+    ['Card language', `${lang.name}${lang.code !== 'en' ? ` (${lang.native})` : ''} · ${lang.script} script`],
+    ['Pages', !dated.length ? '1 — the invitation only (no dated functions)'
+      : separate ? `${dated.length + 1} — the invitation, then one sheet per function`
+      : '2 — the invitation, then every function on one page'],
+    ['Invitation template', template ? `#${template.id} (${template.category})` : '—'],
+    ['Layout', form.design.layout],
+    ['Type', `${form.design.fontSize}px body · letter spacing ${form.design.letterSpacing}px · line height ${form.design.lineHeight}`],
+  );
+  const undated = form.programmes.filter(f => !f.date);
+  if (undated.length) details.push(['Not on the card (no date)', undated.map(f => f.name).join(', ')]);
+
+  return {
+    locale: lang.locale,
+    latin: isLatinCard(form),
+    fonts: {
+      heading: familyName(form.design.headingFont),
+      body: familyName(form.design.bodyFont),
+      script: familyName(form.design.scriptFont || "'Tangerine', cursive"),
+    },
+    deityNames: form.deities.map(id => DEITIES.find(d => d.id === id)?.name).filter(Boolean).join(' · '),
+    mantra: (form.deities[0] && DEITIES.find(d => d.id === form.deities[0])?.mantra) || '',
+    hostLine,
+    template: templateText(form, form.selectedTemplate).replace(/\n\n\n/g, '\n\n'),
+    above: person(aboveSide),
+    relation: relationText(form),
+    below: person(belowSide),
+    residence: form.family.residenceAddress ? { label: L.residence, text: scriptText(form, 'family.residenceAddress', form.family.residenceAddress) } : null,
+    compliments: form.withCompliments ? { label: L.withCompliments, text: scriptText(form, 'withCompliments', form.withCompliments) } : null,
+    kidsLine: kidsLineText(form),
+    closing: closingText(form),
+    programmesHeading: L.programmes,
+    mode: separate ? 'separate' : 'combined',
+    programmes: separate ? [] : dated.map(f => {
+      const when = progWhen(f, false, form);
+      return { name: programmeName(form, f), date: when.date, time: when.time, venue: typed(`programme.${f.id}.venue`, f.venue), address: typed(`programme.${f.id}.address`, f.address) };
+    }),
+    sheets: !separate ? [] : dated.map(f => {
+      const invite = sheetInviteParts(form, f);
+      const when = sheetWhen(form, f);
+      return {
+        name: sheetFunctionName(form, f),
+        // A translation without {couple} has the names after the sentence, as the sheet sets them.
+        inviteBefore: invite.before,
+        inviteAfter: invite.hasCouple ? invite.after : '',
+        coupleLast: !invite.hasCouple,
+        couple: sheetCouple(form), and: L.and.trim(),
+        date: when.date, time: when.time,
+        venue: typed(`programme.${f.id}.venue`, f.venue), address: typed(`programme.${f.id}.address`, f.address),
+        noteLabel: L.note, note: when.note,
+      };
+    }),
+    details,
+    fontsUsed: fontsUsed(form),
+    footer: [order?.orderId, couple].filter(Boolean).join(' · '),
+  };
+}
+
+/** The matter as a Word file. `docx` is loaded on first use only. */
+async function matterDocxFile(form: FormState, base: string, order?: { orderId: string; at: string; status?: string }): Promise<File> {
+  const { buildMatterDocx } = await import('./lib/docxExport');
+  const blob = await buildMatterDocx(cardMatter(form, order));
+  return new File([blob], `${base}-matter.docx`, { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+}
+
+// Lets a headless check build the Word file from the current form without
+// submitting an order. Dev server only; production builds drop it.
+if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__wmpMatterDocx = matterDocxFile;
 
 function loadDraft(): FormState {
   try {
@@ -4434,6 +4543,15 @@ async function cardCanvases(root: HTMLElement): Promise<CardCanvas[]> {
 // after submitting an order). Dev server only; production builds drop it.
 if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__wmpCardCanvases = cardCanvases;
 
+/** The card as SVG files for CorelDRAW, one per page (see lib/svgExport.ts).
+ *  Loaded on demand: the exporter, and for outlines HarfBuzz and the font
+ *  files, never ship in the main bundle. */
+async function cardSvgFiles(root: HTMLElement, base: string, variant: 'editable' | 'outlined') {
+  const { cardSvgFiles } = await import('./lib/svgExport');
+  return cardSvgFiles(root, base, variant);
+}
+if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__wmpCardSvgs = cardSvgFiles;
+
 async function cardPngFiles(pages: CardCanvas[], base: string): Promise<File[]> {
   const files: File[] = [];
   for (let i = 0; i < pages.length; i++) {
@@ -4456,11 +4574,16 @@ async function cardPdfFile(pages: CardCanvas[], base: string): Promise<File | nu
     // jsPDF swaps the format's sides to match `orientation`, so it has to agree with them.
     const orientation = widthIn > heightIn ? 'l' : 'p';
     if (!doc) {
-      doc = new jsPDF({ orientation, unit: 'in', format: [widthIn, heightIn] });
+      doc = new jsPDF({ orientation, unit: 'in', format: [widthIn, heightIn], compress: true });
     } else {
       doc.addPage([widthIn, heightIn], orientation);
     }
-    doc.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, widthIn, heightIn);
+    // JPEG, not PNG: jsPDF stores a PNG as raw uncompressed pixels (~12 MB a
+    // page at print resolution, 60 MB for a 5-page card), which older
+    // importers such as CorelDRAW X4 choke on and report as corrupt. A JPEG
+    // (DCTDecode) page is ~0.5 MB and readable by every PDF consumer. The
+    // card is opaque white, so dropping alpha loses nothing.
+    doc.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, widthIn, heightIn, undefined, 'NONE');
   }
   return doc ? new File([doc.output('blob')], `${base}.pdf`, { type: 'application/pdf' }) : null;
 }
@@ -4495,6 +4618,108 @@ function downloadFiles(files: File[]) {
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
+}
+
+/** Downloads the matter as a Word document. Self-contained (its own busy
+ *  state), styled by the caller to match the export buttons around it. */
+function DocxDownloadButton({ form, base, order, c, className, style }: {
+  form: FormState; base: string; order?: { orderId: string; at: string; status?: string };
+  c: Palette; className: string; style: React.CSSProperties;
+}) {
+  const [busy, setBusy] = useState(false);
+  const download = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      downloadFiles([await matterDocxFile(form, base, order)]);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button onClick={download} disabled={busy} className={className} style={style} {...focusRing(`${c.gold}55`)}>
+      {busy
+        ? <><Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> Preparing…</>
+        : <><FileText className="w-4 h-4" aria-hidden="true" /> Word document (.docx)</>}
+    </button>
+  );
+}
+
+/** The two SVG downloads for a designer opening the card in CorelDRAW, with
+ *  what each one needs. A designer download only: never attached when sharing. */
+function SvgExportButtons({ previewRef, fileBase, form, c, dark }: {
+  previewRef: React.RefObject<HTMLDivElement | null>; fileBase: string; form: FormState; c: Palette; dark: boolean;
+}) {
+  const [busy, setBusy] = useState<'editable' | 'outlined' | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [failed, setFailed] = useState(false);
+  const fonts = fontsUsed(form);
+  const lang = langOf(form);
+  const run = async (variant: 'editable' | 'outlined') => {
+    if (!previewRef.current || busy) return;
+    setBusy(variant); setFailed(false);
+    try {
+      const res = await cardSvgFiles(previewRef.current, fileBase, variant);
+      setWarnings(res.warnings);
+      downloadFiles(res.files);
+    } catch (err) {
+      console.error(err);
+      setFailed(true);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const btn: React.CSSProperties = { minHeight: 50, borderColor: c.border, color: c.text, background: dark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.7)' };
+  const label = (variant: 'editable' | 'outlined', text: string) => busy === variant
+    ? <><Loader2 className="w-4 h-4 animate-spin shrink-0" aria-hidden="true" /> Preparing…</>
+    : <><Download className="w-4 h-4 shrink-0" aria-hidden="true" /> {text}</>;
+  return (
+    <div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+        <button type="button" onClick={() => run('editable')} disabled={!!busy}
+          className="flex items-center justify-center gap-2 px-3 rounded-2xl text-sm font-bold border text-center transition hover:opacity-85 disabled:opacity-60 disabled:cursor-wait"
+          style={btn} {...focusRing(`${c.gold}55`)}>
+          {label('editable', 'SVG for CorelDRAW (editable text)')}
+        </button>
+        <button type="button" onClick={() => run('outlined')} disabled={!!busy}
+          className="flex items-center justify-center gap-2 px-3 rounded-2xl text-sm font-bold border text-center transition hover:opacity-85 disabled:opacity-60 disabled:cursor-wait"
+          style={btn} {...focusRing(`${c.gold}55`)}>
+          {label('outlined', 'SVG for CorelDRAW (outlined, exact look)')}
+        </button>
+      </div>
+      <div className="text-xs mt-2.5 font-medium leading-relaxed" style={{ color: c.subtext }}>
+        One file per page, at the card's real size. <strong style={{ color: c.text }}>Outlined</strong> needs nothing installed — every letter is a shape, so it looks exactly like the preview, but the wording can't be retyped.{' '}
+        <strong style={{ color: c.text }}>Editable</strong> keeps the text as text, so first install {fonts.length === 1 ? 'this free font' : 'these free fonts'} in Windows:
+        <ul className="mt-1.5 space-y-0.5">
+          {fonts.map(f => (
+            <li key={f.name}>
+              <a href={f.url} target="_blank" rel="noopener noreferrer" className="font-bold underline underline-offset-2" style={{ color: c.gold }}>{f.name}</a>
+              {' '}— {f.roles.join(', ')}
+            </li>
+          ))}
+        </ul>
+        {lang.code !== 'en' && (
+          <div className="mt-1.5">
+            This card is in {lang.name}. CorelDRAW 14 may jumble {lang.script} letters in editable text (joined letters and vowel signs can come apart), so the outlined file is recommended.
+          </div>
+        )}
+      </div>
+      {failed && (
+        <div className="text-xs mt-2 font-semibold flex items-start gap-1.5" style={{ color: '#DC2626' }} role="alert">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" /> The SVG could not be made. Please try again.
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <ul className="text-xs mt-2 font-medium leading-snug space-y-1" style={{ color: c.subtext }} aria-live="polite">
+          {warnings.map(w => (
+            <li key={w} className="flex items-start gap-1.5">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: c.gold }} aria-hidden="true" /> <span>{w}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 /** Sends the matter and the card files together.
@@ -4694,6 +4919,9 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
             {copied ? <><Check className="w-4 h-4" strokeWidth={3} aria-hidden="true" /> Copied!</> : <><Copy className="w-4 h-4" aria-hidden="true" /> Copy Export</>}
           </button>
         </div>
+        <DocxDownloadButton form={form} base={fileBase} order={submitted} c={c}
+          className="w-full mt-3 flex items-center justify-center gap-2 rounded-2xl font-bold text-sm border transition hover:opacity-80 disabled:opacity-60 disabled:cursor-wait"
+          style={{ minHeight: 54, borderColor: c.border, color: c.text, background: c.surface }} />
         <p className="text-xs mt-3 text-center font-medium leading-snug max-w-md mx-auto" style={{ color: c.subtext }}>
           WhatsApp and Gmail open pre-filled with your order details as text — neither can attach the card, so download the image if you want to send the card itself.
         </p>
@@ -4782,6 +5010,9 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
               style={{ borderColor: c.border, background: dark ? 'rgba(0,0,0,0.32)' : 'rgba(255,255,255,0.7)', color: c.text, opacity: 0.85 }}>{corel}</pre>
           </div>
         )}
+        <div className="px-4 sm:px-6 pb-5">
+          <SvgExportButtons previewRef={previewRef} fileBase={fileBase} form={form} c={c} dark={dark} />
+        </div>
       </motion.div>
 
       <button onClick={onReset}
@@ -5288,6 +5519,12 @@ function OrderModal({ order, onClose, c, dark, onStatusChange, onDelete }: { ord
                   {...focusRing(`${c.gold}55`)}>
                   {downloadingPdf ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <FileText className="w-4 h-4" aria-hidden="true" />} {downloadingPdf ? 'Preparing…' : 'PDF File'}
                 </button>
+              </div>
+              <DocxDownloadButton form={order.form} base={fileBase} order={order} c={c}
+                className="w-full mt-2.5 flex items-center justify-center gap-2 rounded-2xl text-sm font-bold border transition hover:opacity-85 disabled:opacity-60 disabled:cursor-wait"
+                style={{ minHeight: 50, borderColor: c.border, color: c.text, background: dark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.7)' }} />
+              <div className="mt-2.5">
+                <SvgExportButtons previewRef={previewRef} fileBase={fileBase} form={order.form} c={c} dark={dark} />
               </div>
               <button onClick={shareWA}
                 className="w-full mt-2.5 flex items-center justify-center gap-2 rounded-2xl text-white text-sm font-bold transition hover:opacity-90"
