@@ -1200,10 +1200,26 @@ function AdminLogin({ c }: { c: Palette }) {
 }
 
 /* ─── Customer Flow ──────────────────────────────────────────────────────── */
+
+/** The order just submitted in this tab. Phones often unload a browser tab
+ *  while the customer is in WhatsApp or Gmail sending the card; on return the
+ *  page reloads, and with the success screen held only in memory they landed
+ *  on an empty start page, which looked like a crash. sessionStorage belongs
+ *  to the tab and survives that reload, but not a new tab or visit. */
+const LAST_ORDER_KEY = 'wmp_last_order';
+
+function loadLastOrder(): SubmittedOrder | null {
+  try {
+    const raw = sessionStorage.getItem(LAST_ORDER_KEY);
+    return raw ? (JSON.parse(raw) as SubmittedOrder) : null;
+  } catch {
+    return null;
+  }
+}
 function CustomerFlow({ c, dark, addOrder, onBack }: { c: Palette; dark: boolean; addOrder: (couple: string, form: FormState) => Promise<SubmittedOrder | null>; onBack?: () => void }) {
   const [step, setStep] = useState(0);
-  const [form, setForm] = useState<FormState>(() => loadDraft());
-  const [submitted, setSubmitted] = useState<SubmittedOrder | null>(null);
+  const [form, setForm] = useState<FormState>(() => loadLastOrder()?.form ?? loadDraft());
+  const [submitted, setSubmitted] = useState<SubmittedOrder | null>(loadLastOrder);
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -1218,13 +1234,16 @@ function CustomerFlow({ c, dark, addOrder, onBack }: { c: Palette; dark: boolean
   }, []);
 
   useEffect(() => {
+    // A submitted card isn't a draft: saving it would greet the next visit
+    // with the last customer's order already filled in.
+    if (submitted) return;
     setSaving(true);
     const id = setTimeout(() => {
       try { localStorage.setItem(DRAFT_KEY, JSON.stringify(form)); } catch { /* ignore */ }
       setSaving(false);
     }, 600);
     return () => clearTimeout(id);
-  }, [form]);
+  }, [form, submitted]);
 
   // Clones only the objects along `path` rather than deep-cloning the whole
   // FormState. The old JSON.parse(JSON.stringify(prev)) round-tripped every
@@ -1277,6 +1296,7 @@ function CustomerFlow({ c, dark, addOrder, onBack }: { c: Palette; dark: boolean
     if (!order) { showToast('Could not save your order — check your connection and try again.', 'error'); return; }
     setSubmitted(order);
     try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+    try { sessionStorage.setItem(LAST_ORDER_KEY, JSON.stringify(order)); } catch { /* ignore */ }
   };
 
   const coupleNames = form.bride.name && form.groom.name ? `${form.bride.name} & ${form.groom.name}` : null;
@@ -1288,7 +1308,10 @@ function CustomerFlow({ c, dark, addOrder, onBack }: { c: Palette; dark: boolean
     : `linear-gradient(165deg, ${c.ink}16 0%, ${c.ink}08 100%)`;
   const stageInset = `inset 0 1px 0 ${c.gold}26, inset 0 18px 34px -22px rgba(0,0,0,0.75)`;
 
-  if (submitted) return <Success submitted={submitted} c={c} form={form} dark={dark} onReset={() => { setSubmitted(null); setForm(initialForm); setStep(0); }} />;
+  if (submitted) return <Success submitted={submitted} c={c} form={form} dark={dark} onReset={() => {
+    try { sessionStorage.removeItem(LAST_ORDER_KEY); } catch { /* ignore */ }
+    setSubmitted(null); setForm(initialForm); setStep(0);
+  }} />;
 
   return (
     <div className="pt-4 sm:pt-6">
@@ -4486,56 +4509,76 @@ function openMailDraft(subject: string, body: string, fallback: string) {
   window.open(url.length > 7500 ? build(fallback) : url, '_blank', 'noopener');
 }
 
-/** Every card page under `root`, rendered once. html2canvas is the expensive
- *  part of an export, so the PNGs and the PDF are both built from these rather
- *  than rendering the card twice. */
 interface CardCanvas { canvas: HTMLCanvasElement; widthIn: number; heightIn: number }
 
-async function cardCanvases(root: HTMLElement): Promise<CardCanvas[]> {
+/** The card's pages under `root`. Each rendered page carries .wmp-card-page;
+ *  selecting on that rather than root.children matters: the ref wraps
+ *  CardPreview, whose own root is a single spacing container, so children[] is
+ *  one element holding every page. */
+function cardPageElements(root: HTMLElement): HTMLElement[] {
+  const pages = Array.from(root.querySelectorAll<HTMLElement>('.wmp-card-page'));
+  return pages.length ? pages : [root];
+}
+
+/** Frees a canvas's pixels now rather than whenever garbage collection gets to
+ *  it. iOS Safari caps the memory of live canvases and kills the tab past it;
+ *  five print-resolution pages held at once came to ~100 MB. */
+function releaseCanvas(canvas: HTMLCanvasElement) {
+  canvas.width = 0;
+  canvas.height = 0;
+}
+
+/** One card page rendered to a canvas at up to `maxScale`× its CSS size. Sheets
+ *  are laid out at PX_PER_IN, so 3× is roughly 300 dpi print quality and 2×
+ *  about 190 dpi, plenty to view on a phone or print as a proof. */
+async function renderCardPage(el: HTMLElement, maxScale: number): Promise<CardCanvas> {
   // html2canvas-pro, not html2canvas: the original draws fonts with built-in
   // line spacing (Tangerine, Great Vibes, Cormorant) ~0.4em too low, which put
   // the rule under "Weds" through the middle of the word in every PDF.
   const { default: html2canvas } = await import('html2canvas-pro');
-  // Each rendered card page carries .wmp-card-page. Selecting on that rather
-  // than root.children matters: the ref wraps CardPreview, whose own root is a
-  // single spacing container, so children[] is one element holding both pages.
-  const pages = Array.from(root.querySelectorAll<HTMLElement>('.wmp-card-page'));
-  const targets = pages.length ? pages : [root];
+  // Capped near 16 megapixels, past which iOS Safari silently draws nothing.
+  const scale = Math.min(maxScale, Math.sqrt(16_000_000 / Math.max(1, el.offsetWidth * el.offsetHeight)));
+  const canvas = await html2canvas(el, {
+    scale, backgroundColor: '#ffffff', useCORS: true,
+    // html2canvas copies the whole document into an iframe for every capture.
+    // Copying only this page, its ancestors (for inherited styles) and <head>
+    // (the stylesheets) gives the same picture about 9× faster: a five-page
+    // card went from ~7 s to ~1.5 s on a desktop, and phones are 4× slower.
+    ignoreElements: n => !(n.contains(el) || el.contains(n) || !!n.closest('head')),
+    // On screen the sheet sits inside a scale() that fits it to the preview
+    // column. Captured as-is, html2canvas would measure that shrunken box and
+    // render the sheet mis-sized inside it; so the clone drops the view scale
+    // (and any hover lift) and is captured at its true physical size. The
+    // fit is then re-run, because the clone's iframe has its own viewport
+    // and font loading and could wrap a line differently from the screen.
+    //
+    // Box shadows go too, as they do in the print stylesheet: they are screen
+    // chrome, and html2canvas paints the sheet's inset edge-ring shadow as a
+    // solid tint across the whole card.
+    onclone: (doc, clone) => {
+      const style = doc.createElement('style');
+      style.textContent = '.wmp-card-page, .wmp-card-page * { box-shadow: none !important; }';
+      doc.head.appendChild(style);
+      const scaler = clone.closest<HTMLElement>('.wmp-sheet-scaler');
+      if (scaler) scaler.style.transform = 'none';
+      if (clone.classList.contains('wmp-card-page')) {
+        clone.style.transform = 'none';
+        fitSheetContent(clone);
+      }
+    },
+  });
+  return {
+    canvas,
+    widthIn: Number(el.dataset.widthIn) || el.offsetWidth / PX_PER_IN,
+    heightIn: Number(el.dataset.heightIn) || el.offsetHeight / PX_PER_IN,
+  };
+}
+
+/** Every card page under `root`, all held at once. Only the dev hook below uses
+ *  it; the real exports go through cardFiles(), which keeps one page at a time. */
+async function cardCanvases(root: HTMLElement, maxScale = 3): Promise<CardCanvas[]> {
   const out: CardCanvas[] = [];
-  for (const el of targets) {
-    // Sheets are laid out at PX_PER_IN, so ~3× is roughly 300dpi print quality.
-    // Capped near 16 megapixels, past which iOS Safari silently draws nothing.
-    const scale = Math.min(3, Math.sqrt(16_000_000 / Math.max(1, el.offsetWidth * el.offsetHeight)));
-    const canvas = await html2canvas(el, {
-      scale, backgroundColor: '#ffffff', useCORS: true,
-      // On screen the sheet sits inside a scale() that fits it to the preview
-      // column. Captured as-is, html2canvas would measure that shrunken box and
-      // render the sheet mis-sized inside it; so the clone drops the view scale
-      // (and any hover lift) and is captured at its true physical size. The
-      // fit is then re-run, because the clone's iframe has its own viewport
-      // and font loading and could wrap a line differently from the screen.
-      //
-      // Box shadows go too, as they do in the print stylesheet: they are screen
-      // chrome, and html2canvas paints the sheet's inset edge-ring shadow as a
-      // solid tint across the whole card.
-      onclone: (doc, clone) => {
-        const style = doc.createElement('style');
-        style.textContent = '.wmp-card-page, .wmp-card-page * { box-shadow: none !important; }';
-        doc.head.appendChild(style);
-        const scaler = clone.closest<HTMLElement>('.wmp-sheet-scaler');
-        if (scaler) scaler.style.transform = 'none';
-        if (clone.classList.contains('wmp-card-page')) {
-          clone.style.transform = 'none';
-          fitSheetContent(clone);
-        }
-      },
-    });
-    out.push({
-      canvas,
-      widthIn: Number(el.dataset.widthIn) || el.offsetWidth / PX_PER_IN,
-      heightIn: Number(el.dataset.heightIn) || el.offsetHeight / PX_PER_IN,
-    });
-  }
+  for (const el of cardPageElements(root)) out.push(await renderCardPage(el, maxScale));
   return out;
 }
 
@@ -4552,50 +4595,94 @@ async function cardSvgFiles(root: HTMLElement, base: string, variant: 'editable'
 }
 if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__wmpCardSvgs = cardSvgFiles;
 
-async function cardPngFiles(pages: CardCanvas[], base: string): Promise<File[]> {
-  const files: File[] = [];
-  for (let i = 0; i < pages.length; i++) {
-    const blob = await new Promise<Blob | null>(res => pages[i].canvas.toBlob(res, 'image/png'));
-    if (blob) {
-      const name = pages.length > 1 ? `${base}-page-${i + 1}.png` : `${base}.png`;
-      files.push(new File([blob], name, { type: 'image/png' }));
+/** The card as files: one PNG per page and/or one PDF holding every page, each
+ *  PDF page at the card's real trim size in inches so a printer can print it
+ *  at 100%. The PNGs preview inline in a chat or mail body; the PDF is what a
+ *  printer or designer wants.
+ *
+ *  Pages are rendered, encoded and released one at a time, so a five-page card
+ *  never holds more than one page's pixels: holding them all is what took
+ *  phone tabs down while sharing. */
+async function cardFiles(root: HTMLElement, base: string, opts: {
+  png?: boolean; pdf?: boolean; maxScale?: number; onProgress?: (done: number, total: number) => void;
+} = {}): Promise<File[]> {
+  const { png = true, pdf = true, maxScale = 3, onProgress } = opts;
+  const els = cardPageElements(root);
+  const jspdf = pdf ? await import('jspdf') : null;
+  let doc: import('jspdf').jsPDF | null = null;
+  const pngs: File[] = [];
+  for (let i = 0; i < els.length; i++) {
+    const { canvas, widthIn, heightIn } = await renderCardPage(els[i], maxScale);
+    if (png) {
+      const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/png'));
+      if (blob) pngs.push(new File([blob], els.length > 1 ? `${base}-page-${i + 1}.png` : `${base}.png`, { type: 'image/png' }));
     }
+    if (jspdf) {
+      // jsPDF swaps the format's sides to match `orientation`, so it has to agree with them.
+      const orientation = widthIn > heightIn ? 'l' : 'p';
+      if (!doc) doc = new jspdf.jsPDF({ orientation, unit: 'in', format: [widthIn, heightIn], compress: true });
+      else doc.addPage([widthIn, heightIn], orientation);
+      // JPEG, not PNG: jsPDF stores a PNG as raw uncompressed pixels (~12 MB a
+      // page at print resolution, 60 MB for a 5-page card), which older
+      // importers such as CorelDRAW X4 choke on and report as corrupt. A JPEG
+      // (DCTDecode) page is ~0.5 MB and readable by every PDF consumer. The
+      // card is opaque white, so dropping alpha loses nothing.
+      doc.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, widthIn, heightIn, undefined, 'NONE');
+    }
+    releaseCanvas(canvas);
+    onProgress?.(i + 1, els.length);
   }
-  return files;
+  return doc ? [...pngs, new File([doc.output('blob')], `${base}.pdf`, { type: 'application/pdf' })] : pngs;
 }
 
-/** One PDF page per card page, at the card's real trim size in inches, so a
- *  printer can print it at 100% and get the right card. */
-async function cardPdfFile(pages: CardCanvas[], base: string): Promise<File | null> {
-  if (!pages.length) return null;
-  const { jsPDF } = await import('jspdf');
-  let doc: InstanceType<typeof jsPDF> | null = null;
-  for (const { canvas, widthIn, heightIn } of pages) {
-    // jsPDF swaps the format's sides to match `orientation`, so it has to agree with them.
-    const orientation = widthIn > heightIn ? 'l' : 'p';
-    if (!doc) {
-      doc = new jsPDF({ orientation, unit: 'in', format: [widthIn, heightIn], compress: true });
-    } else {
-      doc.addPage([widthIn, heightIn], orientation);
-    }
-    // JPEG, not PNG: jsPDF stores a PNG as raw uncompressed pixels (~12 MB a
-    // page at print resolution, 60 MB for a 5-page card), which older
-    // importers such as CorelDRAW X4 choke on and report as corrupt. A JPEG
-    // (DCTDecode) page is ~0.5 MB and readable by every PDF consumer. The
-    // card is opaque white, so dropping alpha loses nothing.
-    doc.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, widthIn, heightIn, undefined, 'NONE');
-  }
-  return doc ? new File([doc.output('blob')], `${base}.pdf`, { type: 'application/pdf' }) : null;
-}
+/** Card files made ahead of the tap that sends them.
+ *
+ *  A phone opens its share sheet only from inside the tap that asked for it
+ *  (Chrome allows about five seconds), and desktop browsers block the Gmail
+ *  tab under the same rule. Building a five-page card took ~12 s on a
+ *  mid-range phone, so building it after the tap meant the share was refused
+ *  and the customer was left with a long spinner and stray downloads. Now the
+ *  files are built first, at 2× (about 190 dpi, plenty to view or proof), and
+ *  the tap only hands them over. `autoStart` begins at once (the success
+ *  screen, where sending is the customer's next step); otherwise the first tap
+ *  calls prepare() and a second tap sends. */
+function usePreparedCardFiles(rootRef: React.RefObject<HTMLDivElement | null>, base: string, autoStart: boolean) {
+  const [files, setFiles] = useState<File[] | null>(null);
+  const [progress, setProgress] = useState<[number, number] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const running = useRef(false);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
-/** The card as shareable files: one PNG per page, plus a single PDF holding
- *  every page. Both formats go along because they get used differently — the
- *  PNGs preview inline in a chat or mail body, the PDF is what a printer or
- *  designer wants. */
-async function cardFiles(root: HTMLElement, base: string): Promise<File[]> {
-  const pages = await cardCanvases(root);
-  const pdf = await cardPdfFile(pages, base);
-  return [...await cardPngFiles(pages, base), ...(pdf ? [pdf] : [])];
+  const prepare = useCallback(async () => {
+    const root = rootRef.current;
+    if (running.current || files || !root) return;
+    running.current = true;
+    setFailed(false);
+    setProgress([0, cardPageElements(root).length]);
+    try {
+      // The pages must have their final fonts and fit before they're captured.
+      await document.fonts?.ready;
+      await new Promise(r => requestAnimationFrame(r));
+      const made = await cardFiles(root, base, { maxScale: 2, onProgress: (d, t) => { if (alive.current) setProgress([d, t]); } });
+      if (alive.current) setFiles(made);
+    } catch (err) {
+      console.error('[share] preparing the card failed', err);
+      if (alive.current) setFailed(true);
+    } finally {
+      running.current = false;
+      if (alive.current) setProgress(null);
+    }
+  }, [rootRef, base, files]);
+
+  useEffect(() => {
+    if (!autoStart) return;
+    // A moment's grace so the success animation and fonts settle first.
+    const t = setTimeout(prepare, 900);
+    return () => clearTimeout(t);
+  }, [autoStart, prepare]);
+
+  return { files, progress, failed, prepare };
 }
 
 /** Whether the OS share sheet will both carry these files AND be likely to
@@ -4604,9 +4691,12 @@ async function cardFiles(root: HTMLElement, base: string): Promise<File[]> {
  *  studio would be offered Mail and OneNote rather than Gmail; there the mail
  *  draft plus a download is the more useful path. */
 function canShareCardFiles(files: File[]): boolean {
+  return isPhone() && typeof navigator.share === 'function' && !!navigator.canShare?.({ files });
+}
+
+function isPhone(): boolean {
   const uaMobile = (navigator as unknown as { userAgentData?: { mobile?: boolean } }).userAgentData?.mobile;
-  const mobile = uaMobile ?? /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  return mobile && typeof navigator.share === 'function' && !!navigator.canShare?.({ files });
+  return uaMobile ?? /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
 
 function downloadFiles(files: File[]) {
@@ -4673,6 +4763,16 @@ function SvgExportButtons({ previewRef, fileBase, form, c, dark }: {
   const label = (variant: 'editable' | 'outlined', text: string) => busy === variant
     ? <><Loader2 className="w-4 h-4 animate-spin shrink-0" aria-hidden="true" /> Preparing…</>
     : <><Download className="w-4 h-4 shrink-0" aria-hidden="true" /> {text}</>;
+  // Phones have no app that opens SVG, and Gmail/WhatsApp won't preview one, so
+  // offering them there only produced files nobody could open.
+  if (isPhone()) {
+    return (
+      <div className="text-xs font-medium leading-relaxed flex items-start gap-1.5" style={{ color: c.subtext }}>
+        <Monitor className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: c.gold }} aria-hidden="true" />
+        <span>SVG files for CorelDRAW are made on a computer: phones can't open SVG. To view or send the card on this phone, use the image or PDF.</span>
+      </div>
+    );
+  }
   return (
     <div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -4722,32 +4822,38 @@ function SvgExportButtons({ previewRef, fileBase, form, c, dark }: {
   );
 }
 
-/** Sends the matter and the card files together.
+/** Sends the matter with the card files (see usePreparedCardFiles), or the
+ *  matter alone when they couldn't be made.
  *
  *  On a phone the OS share sheet takes text and files in one go, so picking
  *  Gmail or WhatsApp there genuinely attaches the card. Anywhere else this is
  *  not possible from a web page: neither `mailto:` nor Gmail's compose URL
  *  accepts an attachment, and no site can attach to Gmail without the Gmail
- *  API and an OAuth consent flow. So the desktop path saves the files and
- *  opens the draft, leaving one drag to the user rather than pretending the
- *  attachment happened. Returns which of the two actually ran. */
-async function shareMatterAndCard(opts: {
-  root: HTMLElement; base: string; subject: string; body: string; fallback: string;
-}): Promise<'shared' | 'downloaded'> {
-  const files = await cardFiles(opts.root, opts.base);
-  if (files.length && canShareCardFiles(files)) {
-    try {
-      await navigator.share({ files, title: opts.subject, text: opts.body });
-      return 'shared';
-    } catch (err) {
-      // Dismissing the sheet is a choice, not a failure — don't then dump
-      // downloads and a mail draft on someone who just backed out.
-      if ((err as Error)?.name === 'AbortError') return 'shared';
-    }
+ *  API and an OAuth consent flow. So the desktop path opens the draft and
+ *  saves the files, leaving one drag to the user rather than pretending the
+ *  attachment happened.
+ *
+ *  Must be called straight from the click, with nothing awaited first: the
+ *  share sheet and the Gmail tab are both refused once the gesture has gone
+ *  stale. `done` reports which path ran. */
+function sendMatterAndCard(files: File[] | null, opts: { subject: string; body: string; fallback: string }, done: (how: 'shared' | 'downloaded') => void) {
+  if (files?.length && canShareCardFiles(files)) {
+    navigator.share({ files, title: opts.subject, text: opts.body })
+      .then(() => done('shared'))
+      .catch(err => {
+        // Dismissing the sheet is a choice, not a failure — don't then dump
+        // downloads and a mail draft on someone who just backed out.
+        if ((err as Error)?.name === 'AbortError') return;
+        downloadFiles(files);
+        openMailDraft(opts.subject, opts.body, opts.fallback);
+        done('downloaded');
+      });
+    return;
   }
-  downloadFiles(files);
+  // The draft first, while the click still counts for the popup blocker.
   openMailDraft(opts.subject, opts.body, opts.fallback);
-  return 'downloaded';
+  if (files?.length) downloadFiles(files);
+  done('downloaded');
 }
 
 /* ─── Success ────────────────────────────────────────────────────────────── */
@@ -4757,7 +4863,6 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
   const [idCopied, setIdCopied] = useState(false);
   const [showExport, setShowExport] = useState(false);
   const [downloadingPng, setDownloadingPng] = useState(false);
-  const [sharing, setSharing] = useState(false);
   const [shareHint, setShareHint] = useState<'shared' | 'downloaded' | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const reduce = usePrefersReducedMotion();
@@ -4766,6 +4871,8 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
   // Names are free text, so strip the characters Windows/macOS reject in filenames.
   const fileBase = [submitted.orderId, form.bride.name, form.groom.name]
     .filter(Boolean).join(' ').replace(/[\\/:*?"<>|]+/g, '').trim().replace(/\s+/g, '-');
+  // Sending is the customer's next step here, so the card is built straight away.
+  const prepared = usePreparedCardFiles(previewRef, fileBase, true);
   const downloadPng = async () => {
     if (!previewRef.current || downloadingPng) return;
     setDownloadingPng(true);
@@ -4773,27 +4880,21 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
       // One PNG per page, each at the card's proportions. Capturing the whole
       // preview instead would stack the pages with their screen labels, and at
       // the preview's on-screen scale.
-      downloadFiles(await cardPngFiles(await cardCanvases(previewRef.current), fileBase));
+      downloadFiles(await cardFiles(previewRef.current, fileBase, { pdf: false }));
     } finally {
       setDownloadingPng(false);
     }
   };
-  const shareEmail = async () => {
-    if (!previewRef.current || sharing) return;
-    setSharing(true);
-    try {
-      const couple = [form.bride.name, form.groom.name].filter(Boolean).join(' & ');
-      const heading = `Order Number: ${submitted.orderId}\nCouple: ${couple || '—'}\nSubmitted: ${submitted.at}`;
-      setShareHint(await shareMatterAndCard({
-        root: previewRef.current,
-        base: fileBase,
-        subject: `Wedding Matter ${submitted.orderId}${couple ? ` — ${couple}` : ''}`,
-        body: `${heading}\n\n${corel}\n\n— Wedding Matter Pro`,
-        fallback: `${heading}\n\nThe full matter was too long for one draft. Use "Copy Export" on the confirmation page and paste it below this line.\n\n— Wedding Matter Pro`,
-      }));
-    } finally {
-      setSharing(false);
-    }
+  const shareEmail = () => {
+    if (prepared.progress) return;
+    if (!prepared.files && !prepared.failed) { prepared.prepare(); return; }
+    const couple = [form.bride.name, form.groom.name].filter(Boolean).join(' & ');
+    const heading = `Order Number: ${submitted.orderId}\nCouple: ${couple || '—'}\nSubmitted: ${submitted.at}`;
+    sendMatterAndCard(prepared.files, {
+      subject: `Wedding Matter ${submitted.orderId}${couple ? ` — ${couple}` : ''}`,
+      body: `${heading}\n\n${corel}\n\n— Wedding Matter Pro`,
+      fallback: `${heading}\n\nThe full matter was too long for one draft. Use "Copy Export" on the confirmation page and paste it below this line.\n\n— Wedding Matter Pro`,
+    }, setShareHint);
   };
   const shareWA = () => {
     const text = encodeURIComponent(`🌹 *New Wedding Matter Order*\n\n*Order ID:* ${submitted.orderId}\n*Couple:* ${form.bride.name} ❤️ ${form.groom.name}\n*Submitted:* ${submitted.at}\n\n_Wedding Matter Pro_`);
@@ -4896,13 +4997,13 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
           <MessageCircle className="w-5 h-5" aria-hidden="true" /> Share on WhatsApp
         </button>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
-          <button onClick={shareEmail} disabled={sharing}
+          <button onClick={shareEmail} disabled={!!prepared.progress}
             className="flex items-center justify-center gap-2 rounded-2xl font-bold text-sm border transition hover:opacity-80 disabled:opacity-60 disabled:cursor-wait"
             style={{ minHeight: 54, borderColor: c.border, color: c.text, background: c.surface }}
             {...focusRing(`${c.gold}55`)}>
-            {sharing
-              ? <><Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> Preparing…</>
-              : <><Mail className="w-4 h-4" aria-hidden="true" /> Email with card</>}
+            {prepared.progress
+              ? <><Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> Preparing card {prepared.progress[0]}/{prepared.progress[1]}</>
+              : <><Mail className="w-4 h-4" aria-hidden="true" /> {prepared.failed ? 'Email the matter' : 'Email with card'}</>}
           </button>
           <button onClick={downloadPng} disabled={downloadingPng}
             className="flex items-center justify-center gap-2 rounded-2xl font-bold text-sm border transition hover:opacity-80 disabled:opacity-60 disabled:cursor-wait"
@@ -4922,8 +5023,12 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
         <DocxDownloadButton form={form} base={fileBase} order={submitted} c={c}
           className="w-full mt-3 flex items-center justify-center gap-2 rounded-2xl font-bold text-sm border transition hover:opacity-80 disabled:opacity-60 disabled:cursor-wait"
           style={{ minHeight: 54, borderColor: c.border, color: c.text, background: c.surface }} />
-        <p className="text-xs mt-3 text-center font-medium leading-snug max-w-md mx-auto" style={{ color: c.subtext }}>
-          WhatsApp and Gmail open pre-filled with your order details as text — neither can attach the card, so download the image if you want to send the card itself.
+        <p className="text-xs mt-3 text-center font-medium leading-snug max-w-md mx-auto" style={{ color: c.subtext }} aria-live="polite">
+          {shareHint === 'downloaded'
+            ? 'A Gmail draft opened with your matter, and the card (PNG pages and a PDF) was saved to your downloads: drag the files into the draft to attach them.'
+            : isPhone()
+              ? 'Email with card opens your phone’s share menu with the card attached: pick Gmail or any app. WhatsApp sends your order details as text.'
+              : 'WhatsApp sends your order details as text. Email with card opens a Gmail draft with the matter and saves the card files for you to attach.'}
         </p>
       </motion.div>
 
@@ -5310,7 +5415,6 @@ function OrderModal({ order, onClose, c, dark, onStatusChange, onDelete }: { ord
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [downloadingPng, setDownloadingPng] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
-  const [sharing, setSharing] = useState(false);
   const [shareHint, setShareHint] = useState<'shared' | 'downloaded' | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const reduce = usePrefersReducedMotion();
@@ -5323,29 +5427,26 @@ function OrderModal({ order, onClose, c, dark, onStatusChange, onDelete }: { ord
   // mailto: bodies are silently truncated past ~2000 chars by many mail clients,
   // so the matter only travels inline when it fits; otherwise the draft carries
   // the order details and the matter goes across by clipboard.
-  const shareEmail = async () => {
-    if (!previewRef.current || sharing) return;
-    setSharing(true);
-    try {
-      const heading = `Order Number: ${order.orderId}\nCouple: ${order.couple}\nSubmitted: ${order.at}`;
-      setShareHint(await shareMatterAndCard({
-        root: previewRef.current,
-        base: fileBase,
-        subject: `Order ${order.orderId} — ${order.couple}`,
-        body: `${heading}\n\n${corel}`,
-        fallback: `${heading}\n\nThe full matter was too long for one draft. Copy it with "Copy matter for CorelDRAW" and paste it here.`,
-      }));
-    } finally {
-      setSharing(false);
-    }
-  };
   const fileBase = `${order.orderId}-${order.couple.replace(/\s+/g, '-')}`;
+  // Opening an order is mostly to read it, so the card is built only when the
+  // first tap on email asks for it; the second tap sends (see usePreparedCardFiles).
+  const prepared = usePreparedCardFiles(previewRef, fileBase, false);
+  const shareEmail = () => {
+    if (prepared.progress) return;
+    if (!prepared.files && !prepared.failed) { prepared.prepare(); return; }
+    const heading = `Order Number: ${order.orderId}\nCouple: ${order.couple}\nSubmitted: ${order.at}`;
+    sendMatterAndCard(prepared.files, {
+      subject: `Order ${order.orderId} — ${order.couple}`,
+      body: `${heading}\n\n${corel}`,
+      fallback: `${heading}\n\nThe full matter was too long for one draft. Copy it with "Copy matter for CorelDRAW" and paste it here.`,
+    }, setShareHint);
+  };
   const downloadPng = async () => {
     if (!previewRef.current || downloadingPng) return;
     setDownloadingPng(true);
     try {
       // One PNG per page, each at the card's proportions (see Success).
-      downloadFiles(await cardPngFiles(await cardCanvases(previewRef.current), fileBase));
+      downloadFiles(await cardFiles(previewRef.current, fileBase, { pdf: false }));
     } finally {
       setDownloadingPng(false);
     }
@@ -5357,8 +5458,7 @@ function OrderModal({ order, onClose, c, dark, onStatusChange, onDelete }: { ord
     if (!previewRef.current || downloadingPdf) return;
     setDownloadingPdf(true);
     try {
-      const pdf = await cardPdfFile(await cardCanvases(previewRef.current), fileBase);
-      if (pdf) downloadFiles([pdf]);
+      downloadFiles(await cardFiles(previewRef.current, fileBase, { png: false }));
     } finally {
       setDownloadingPdf(false);
     }
@@ -5532,13 +5632,15 @@ function OrderModal({ order, onClose, c, dark, onStatusChange, onDelete }: { ord
                 {...focusRing('#1DA85166')}>
                 <MessageCircle className="w-4 h-4" aria-hidden="true" /> Send matter on WhatsApp
               </button>
-              <button onClick={shareEmail} disabled={sharing}
+              <button onClick={shareEmail} disabled={!!prepared.progress}
                 className="w-full mt-2.5 flex items-center justify-center gap-2 rounded-2xl text-sm font-bold border transition hover:opacity-85 disabled:opacity-60 disabled:cursor-wait"
                 style={{ minHeight: 50, borderColor: c.border, color: c.text, background: dark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.7)' }}
                 {...focusRing(`${c.gold}55`)}>
-                {sharing
-                  ? <><Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> Preparing card…</>
-                  : <><Mail className="w-4 h-4" aria-hidden="true" /> Send matter + card by email</>}
+                {prepared.progress
+                  ? <><Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> Preparing card {prepared.progress[0]}/{prepared.progress[1]}</>
+                  : prepared.files
+                    ? <><Mail className="w-4 h-4" aria-hidden="true" /> Card ready: send by email</>
+                    : <><Mail className="w-4 h-4" aria-hidden="true" /> {prepared.failed ? 'Send matter by email' : 'Send matter + card by email'}</>}
               </button>
               <div className="text-[11px] mt-2.5 leading-snug font-medium" style={{ color: c.subtext }}>
                 {shareHint === 'downloaded'
