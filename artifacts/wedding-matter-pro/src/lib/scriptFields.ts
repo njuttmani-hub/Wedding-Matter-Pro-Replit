@@ -43,6 +43,14 @@ export function personName(form: FormState, side: 'bride' | 'groom', role: 'fath
   return s ? `${s} ${n}` : n;
 }
 
+/** The grandparents' printed line, in the order the customer chose (grandfather
+ *  first unless set otherwise). `join` is the card's "A and B" joiner; a lone
+ *  grandparent prints alone. Blank when neither is filled in. */
+export function grandparentsLine(form: FormState, side: 'bride' | 'groom', join: (a: string, b: string) => string): string {
+  const roles = form[side].grandparentsFirst === 'grandmother' ? (['grandmother', 'grandfather'] as const) : (['grandfather', 'grandmother'] as const);
+  return join(personName(form, side, roles[0]), personName(form, side, roles[1]));
+}
+
 /** A function's printed name. A preset still carrying its preset name prints
  *  the translated preset; one the customer renamed prints their own words. */
 export function programmeName(form: FormState, f: Programme): string {

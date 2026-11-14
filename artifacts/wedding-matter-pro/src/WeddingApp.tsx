@@ -19,7 +19,7 @@ import { fetchOrders, insertOrder, updateOrderStatus, deleteOrder as deleteOrder
 import { getSession, onAuthChange, signIn, signOut } from './lib/auth';
 import { CARD_LANGUAGES } from './data/languages';
 import { langOf, cardStrings, scriptText, cardDate, cardTime, childOf } from './lib/cardText';
-import { scriptFields, scriptValue, isLatinCard, personName, programmeName, fontHasScript, withLanguage, type ScriptField } from './lib/scriptFields';
+import { scriptFields, scriptValue, isLatinCard, personName, grandparentsLine, programmeName, fontHasScript, withLanguage, type ScriptField } from './lib/scriptFields';
 import { useScriptSuggestions, type ScriptSuggestions } from './lib/useScriptSuggestions';
 import { fontsUsed, familyName } from './lib/fontsUsed';
 import type { CardMatter } from './lib/docxExport';
@@ -511,8 +511,8 @@ function generateCorelText(form: FormState): string {
     // wording sits after them in most Indian languages, so it can't split.
     const parents = [p.fatherName && personName(form, side, 'father'), p.motherName && personName(form, side, 'mother')].filter(Boolean).join(L.and);
     if (parents) s += `${childOf(form, side, parents)}\n`;
-    if (p.grandfatherName) s += `G/o ${personName(form, side, 'grandfather')}\n`;
-    if (p.grandmotherName) s += `${personName(form, side, 'grandmother')}\n`;
+    const gp = grandparentsLine(form, side, (a, b) => (a && b ? `${a}${L.and}${b}` : a || b));
+    if (gp) s += `G/o ${gp}\n`;
     return s + '\n';
   };
 
@@ -589,7 +589,7 @@ function cardMatter(form: FormState, order?: { orderId: string; at: string; stat
     return {
       name: scriptText(form, `${side}.name`, p.name),
       childOf: p.fatherName || p.motherName ? childOf(form, side, pair(personName(form, side, 'father'), personName(form, side, 'mother'))) : '',
-      grandparents: p.grandfatherName ? pair(personName(form, side, 'grandfather'), personName(form, side, 'grandmother')) : '',
+      grandparents: grandparentsLine(form, side, pair),
     };
   };
   const hostLine = form.hostType === 'parents'
@@ -2586,7 +2586,15 @@ function PersonCard({ side, person, update, prefix, c }: { side: string; person:
   const tone = isBride ? c.primary : c.goldDeep;
   const rel = isBride ? 'D/o' : 'S/o';
   const gpFilled = !!(person.grandfatherName || person.grandmotherName);
-  const gpHint = gpFilled ? [person.grandfatherName, person.grandmotherName].filter(Boolean).join(' & ') : 'Not added';
+  const gpFirst = person.grandparentsFirst ?? 'grandfather';
+  const gpOrder = gpFirst === 'grandmother' ? (['grandmother', 'grandfather'] as const) : (['grandfather', 'grandmother'] as const);
+  const gpHint = gpFilled ? gpOrder.map(r => person[`${r}Name` as const]).filter(Boolean).join(' & ') : 'Not added';
+  // Fields follow the chosen order, so the form reads the way the card will.
+  const gpFields = gpOrder.map(r => (
+    <SalutNameField key={r} label={r === 'grandfather' ? "Grandfather's Name" : "Grandmother's Name"}
+      salValue={person[`${r}Prefix` as const]} salPath={`${prefix}.${r}Prefix`}
+      nameValue={person[`${r}Name` as const]} namePath={`${prefix}.${r}Name`} namePlaceholder="Full Name" update={update} c={c} />
+  ));
 
   return (
     <div className="@container rounded-2xl border overflow-hidden" style={{ borderColor: c.border, background: `linear-gradient(180deg, ${tone}0A, transparent 55%)` }}>
@@ -2613,10 +2621,23 @@ function PersonCard({ side, person, update, prefix, c }: { side: string; person:
 
           <Disclosure label="Grandparents" hint={gpHint} defaultOpen={gpFilled} c={c}>
             <div className="space-y-3 pt-1">
-              <SalutNameField label="Grandfather's Name" salValue={person.grandfatherPrefix} salPath={`${prefix}.grandfatherPrefix`}
-                nameValue={person.grandfatherName} namePath={`${prefix}.grandfatherName`} namePlaceholder="Full Name" update={update} c={c} />
-              <SalutNameField label="Grandmother's Name" salValue={person.grandmotherPrefix} salPath={`${prefix}.grandmotherPrefix`}
-                nameValue={person.grandmotherName} namePath={`${prefix}.grandmotherName`} namePlaceholder="Full Name" update={update} c={c} />
+              <div>
+                <div className="text-[11px] font-semibold mb-1.5 opacity-70">Whose name comes first on the card?</div>
+                <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Grandparent order">
+                  {(['grandfather', 'grandmother'] as const).map(r => {
+                    const on = (person.grandparentsFirst ?? 'grandfather') === r;
+                    return (
+                      <button key={r} type="button" role="radio" aria-checked={on}
+                        onClick={() => update(`${prefix}.grandparentsFirst`, r)}
+                        className="rounded-xl border px-3 py-2 text-xs font-semibold transition-colors"
+                        style={{ borderColor: on ? tone : c.border, color: on ? tone : undefined, backgroundColor: on ? `${tone}14` : 'transparent' }}>
+                        {r === 'grandfather' ? 'Grandfather first' : 'Grandmother first'}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              {gpFields}
             </div>
           </Disclosure>
         </div>
@@ -3844,8 +3865,8 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
             {childOf(form, aboveSide, pair(pName(aboveSide, 'father'), pName(aboveSide, 'mother')))}
           </div>
         )}
-        {above.grandfatherName && (
-          <div className="text-[10px] opacity-55 mt-0.5">{pair(pName(aboveSide, 'grandfather'), pName(aboveSide, 'grandmother'))}</div>
+        {(above.grandfatherName || above.grandmotherName) && (
+          <div className="text-[10px] opacity-55 mt-0.5">{grandparentsLine(form, aboveSide, pair)}</div>
         )}
 
         <div className="mt-4 mb-1">
@@ -3866,8 +3887,8 @@ function CardPreview({ form, c, dark, compact }: { form: FormState; c: Palette; 
             {childOf(form, belowSide, pair(pName(belowSide, 'father'), pName(belowSide, 'mother')))}
           </div>
         )}
-        {below.grandfatherName && (
-          <div className="text-[10px] opacity-55 mt-0.5">{pair(pName(belowSide, 'grandfather'), pName(belowSide, 'grandmother'))}</div>
+        {(below.grandfatherName || below.grandmotherName) && (
+          <div className="text-[10px] opacity-55 mt-0.5">{grandparentsLine(form, belowSide, pair)}</div>
         )}
       </div>
 

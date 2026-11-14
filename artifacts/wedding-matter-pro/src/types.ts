@@ -30,6 +30,8 @@ export interface PersonInfo {
   grandfatherPrefix: string;
   grandmotherName: string;
   grandmotherPrefix: string;
+  /** Whose name prints first. Absent on older orders and drafts = grandfather. */
+  grandparentsFirst?: 'grandfather' | 'grandmother';
 }
 
 export interface Programme {
