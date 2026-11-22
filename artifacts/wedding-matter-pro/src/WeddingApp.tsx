@@ -4715,20 +4715,148 @@ function canShareCardFiles(files: File[]): boolean {
   return isPhone() && typeof navigator.share === 'function' && !!navigator.canShare?.({ files });
 }
 
+/** A phone, or an iPad: anything whose share sheet reaches Gmail and WhatsApp. */
 function isPhone(): boolean {
+  if (isIOS()) return true;
   const uaMobile = (navigator as unknown as { userAgentData?: { mobile?: boolean } }).userAgentData?.mobile;
-  return uaMobile ?? /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  return uaMobile ?? /Android/i.test(navigator.userAgent);
 }
 
+/** iPhone, iPad or iPod, in any browser (all of them are Safari underneath).
+ *  An iPad asks for desktop sites and so calls itself a Mac; its touch screen
+ *  gives it away, since no Mac has one. */
+function isIOS(): boolean {
+  const ua = navigator.userAgent;
+  return /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
+}
+
+/** Free text (order number, names) as a file name: no characters that
+ *  Windows, macOS or iOS reject or mangle, spaces as hyphens. */
+function fileSafe(s: string): string {
+  return s.replace(/[\\/:*?"<>|&#%]+/g, ' ').trim().replace(/\s+/g, '-');
+}
+
+/** A browser download. Not for iOS: see saveFiles. The link stays alive for a
+ *  minute because some browsers fetch it only after asking where to save. */
 function downloadFiles(files: File[]) {
   for (const f of files) {
     const url = URL.createObjectURL(f);
     const a = document.createElement('a');
     a.href = url;
     a.download = f.name;
+    a.style.display = 'none';
+    document.body.appendChild(a);
     a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
+}
+
+type SaveResult = 'done' | 'tap-again';
+
+/** Puts finished files in the person's hands: a download, except on iOS.
+ *
+ *  iOS saves downloads badly. Safari asks first and only then reads the file,
+ *  so a file whose link has expired by then arrives empty: the "corrupted"
+ *  Word file. It also takes one download per tap, so the pages of a
+ *  multi-page PNG went missing. So on iOS the files go to the share sheet
+ *  instead, whose "Save to Files" / "Save Image" is how iOS saves a file, and
+ *  which also offers Word, WhatsApp and Mail directly.
+ *
+ *  The sheet opens only from a fresh tap. When building the files took too
+ *  long, iOS refuses it ('tap-again'): the caller keeps the files and asks
+ *  for one more tap, which calls this straight from the click. */
+function saveFiles(files: File[]): Promise<SaveResult> {
+  if (!isIOS() || typeof navigator.share !== 'function' || !navigator.canShare?.({ files })) {
+    downloadFiles(files);
+    return Promise.resolve('done');
+  }
+  return navigator.share({ files }).then((): SaveResult => 'done', (err: Error): SaveResult => {
+    // NotAllowedError: the tap went stale while the files were built.
+    // AbortError: the sheet was closed. InvalidStateError: one is already open.
+    if (['NotAllowedError', 'AbortError', 'InvalidStateError'].includes(err?.name)) return 'tap-again';
+    downloadFiles(files);
+    return 'done';
+  });
+}
+
+/** One save button: builds its files on the first tap and saves them. On iOS
+ *  that tap may have gone stale by the time they're built; the button then
+ *  holds the files ('ready') and the next tap opens the share sheet at once. */
+function useSaveFiles(build: () => Promise<File[]>) {
+  const [state, setState] = useState<'idle' | 'busy' | 'ready' | 'failed'>('idle');
+  const held = useRef<File[] | null>(null);
+  const settle = (files: File[], r: SaveResult) => {
+    held.current = r === 'tap-again' ? files : null;
+    setState(r === 'tap-again' ? 'ready' : 'idle');
+  };
+  const run = async () => {
+    if (state === 'busy') return;
+    const ready = held.current;
+    // Nothing awaited first, or iOS refuses the sheet again.
+    if (ready) { void saveFiles(ready).then(r => settle(ready, r)); return; }
+    setState('busy');
+    try {
+      const files = await build();
+      settle(files, await saveFiles(files));
+    } catch (err) {
+      console.error(err);
+      setState('failed');
+    }
+  };
+  return { state, run };
+}
+
+/** A save button's face for each state of useSaveFiles. */
+function SaveLabel({ state, icon: Icon, text }: { state: 'idle' | 'busy' | 'ready' | 'failed'; icon: React.ElementType; text: string }) {
+  if (state === 'busy') return <><Loader2 className="w-4 h-4 animate-spin shrink-0" aria-hidden="true" /> Preparing…</>;
+  if (state === 'ready') return <><Check className="w-4 h-4 shrink-0" strokeWidth={3} aria-hidden="true" /> Ready: tap to save</>;
+  if (state === 'failed') return <><AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" /> Failed: try again</>;
+  return <><Icon className="w-4 h-4 shrink-0" aria-hidden="true" /> {text}</>;
+}
+
+/** Copies text and reports whether it really reached the clipboard. The copy
+ *  buttons used to say "Copied" whatever happened, so when a phone refused the
+ *  copy, the paste was whatever had been copied before, often part of a name.
+ *  Call straight from the tap: iOS also refuses a copy made after an await. */
+function copyText(text: string): Promise<boolean> {
+  // The old way, for browsers without the clipboard API or that refuse it.
+  // iOS selects a read-only textarea only through setSelectionRange.
+  const legacy = () => {
+    const active = document.activeElement as HTMLElement | null;
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    // 16px stops iOS zooming in; off-screen-but-present so it can be selected.
+    ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:16px;';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    ta.remove();
+    active?.focus?.();
+    return ok;
+  };
+  if (!navigator.clipboard?.writeText) return Promise.resolve(legacy());
+  return navigator.clipboard.writeText(text).then(() => true, () => legacy());
+}
+
+/** A copy button's state: 'copied' or 'failed' for a moment after a tap. */
+function useCopy(ms = 1600) {
+  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const copy = (text: string) => {
+    void copyText(text).then(ok => {
+      setState(ok ? 'copied' : 'failed');
+      clearTimeout(timer.current);
+      // A failure stays up longer: it carries an instruction.
+      timer.current = setTimeout(() => setState('idle'), ok ? ms : 6000);
+    });
+  };
+  return { state, copy };
 }
 
 /** Downloads the matter as a Word document. Self-contained (its own busy
@@ -4737,21 +4865,10 @@ function DocxDownloadButton({ form, base, order, c, className, style }: {
   form: FormState; base: string; order?: { orderId: string; at: string; status?: string };
   c: Palette; className: string; style: React.CSSProperties;
 }) {
-  const [busy, setBusy] = useState(false);
-  const download = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      downloadFiles([await matterDocxFile(form, base, order)]);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const save = useSaveFiles(async () => [await matterDocxFile(form, base, order)]);
   return (
-    <button onClick={download} disabled={busy} className={className} style={style} {...focusRing(`${c.gold}55`)}>
-      {busy
-        ? <><Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> Preparing…</>
-        : <><FileText className="w-4 h-4" aria-hidden="true" /> Word document (.docx)</>}
+    <button onClick={save.run} disabled={save.state === 'busy'} className={className} style={style} {...focusRing(`${c.gold}55`)}>
+      <SaveLabel state={save.state} icon={FileText} text="Word document (.docx)" />
     </button>
   );
 }
@@ -4880,32 +4997,29 @@ function sendMatterAndCard(files: File[] | null, opts: { subject: string; body: 
 /* ─── Success ────────────────────────────────────────────────────────────── */
 function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOrder; c: Palette; form: FormState; dark: boolean; onReset: () => void }) {
   const corel = generateCorelText(form);
-  const [copied, setCopied] = useState(false);
-  const [idCopied, setIdCopied] = useState(false);
+  const matterCopy = useCopy();
+  const idCopy = useCopy();
+  const copied = matterCopy.state === 'copied';
+  const idCopied = idCopy.state === 'copied';
+  const copy = () => matterCopy.copy(corel);
+  const copyId = () => idCopy.copy(submitted.orderId);
   const [showExport, setShowExport] = useState(false);
-  const [downloadingPng, setDownloadingPng] = useState(false);
+  // A refused copy opens the full text, so it can be copied by hand.
+  useEffect(() => { if (matterCopy.state === 'failed') setShowExport(true); }, [matterCopy.state]);
   const [shareHint, setShareHint] = useState<'shared' | 'downloaded' | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const reduce = usePrefersReducedMotion();
-  const copy = () => { navigator.clipboard?.writeText(corel); setCopied(true); setTimeout(() => setCopied(false), 1600); };
-  const copyId = () => { navigator.clipboard?.writeText(submitted.orderId); setIdCopied(true); setTimeout(() => setIdCopied(false), 1600); };
-  // Names are free text, so strip the characters Windows/macOS reject in filenames.
-  const fileBase = [submitted.orderId, form.bride.name, form.groom.name]
-    .filter(Boolean).join(' ').replace(/[\\/:*?"<>|]+/g, '').trim().replace(/\s+/g, '-');
+  // Names are free text, so strip the characters file systems reject.
+  const fileBase = fileSafe([submitted.orderId, form.bride.name, form.groom.name].filter(Boolean).join(' '));
   // Sending is the customer's next step here, so the card is built straight away.
   const prepared = usePreparedCardFiles(previewRef, fileBase, true);
-  const downloadPng = async () => {
-    if (!previewRef.current || downloadingPng) return;
-    setDownloadingPng(true);
-    try {
-      // One PNG per page, each at the card's proportions. Capturing the whole
-      // preview instead would stack the pages with their screen labels, and at
-      // the preview's on-screen scale.
-      downloadFiles(await cardFiles(previewRef.current, fileBase, { pdf: false }));
-    } finally {
-      setDownloadingPng(false);
-    }
-  };
+  // One PNG per page, each at the card's proportions. Capturing the whole
+  // preview instead would stack the pages with their screen labels, and at
+  // the preview's on-screen scale.
+  const png = useSaveFiles(async () => {
+    if (!previewRef.current) return [];
+    return cardFiles(previewRef.current, fileBase, { pdf: false });
+  });
   const shareEmail = () => {
     if (prepared.progress) return;
     if (!prepared.files && !prepared.failed) { prepared.prepare(); return; }
@@ -5026,13 +5140,11 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
               ? <><Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> Preparing card {prepared.progress[0]}/{prepared.progress[1]}</>
               : <><Mail className="w-4 h-4" aria-hidden="true" /> {prepared.failed ? 'Email the matter' : 'Email with card'}</>}
           </button>
-          <button onClick={downloadPng} disabled={downloadingPng}
+          <button onClick={png.run} disabled={png.state === 'busy'}
             className="flex items-center justify-center gap-2 rounded-2xl font-bold text-sm border transition hover:opacity-80 disabled:opacity-60 disabled:cursor-wait"
             style={{ minHeight: 54, borderColor: c.border, color: c.text, background: c.surface }}
             {...focusRing(`${c.gold}55`)}>
-            {downloadingPng
-              ? <><Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> Preparing…</>
-              : <><Download className="w-4 h-4" aria-hidden="true" /> Download Image</>}
+            <SaveLabel state={png.state} icon={Download} text="Download Image" />
           </button>
           <button onClick={copy}
             className="col-span-2 sm:col-span-1 flex items-center justify-center gap-2 rounded-2xl font-bold text-sm border-2 transition hover:opacity-80"
@@ -5041,6 +5153,11 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
             {copied ? <><Check className="w-4 h-4" strokeWidth={3} aria-hidden="true" /> Copied!</> : <><Copy className="w-4 h-4" aria-hidden="true" /> Copy Export</>}
           </button>
         </div>
+        {matterCopy.state === 'failed' && (
+          <p className="text-xs mt-2 text-center font-semibold" style={{ color: '#DC2626' }} role="alert">
+            This phone didn’t allow the copy. The full text is open under “Designer Export” below: press and hold it, choose Select All, then Copy.
+          </p>
+        )}
         <DocxDownloadButton form={form} base={fileBase} order={submitted} c={c}
           className="w-full mt-3 flex items-center justify-center gap-2 rounded-2xl font-bold text-sm border transition hover:opacity-80 disabled:opacity-60 disabled:cursor-wait"
           style={{ minHeight: 54, borderColor: c.border, color: c.text, background: c.surface }} />
@@ -5127,7 +5244,7 @@ function Success({ submitted, c, form, dark, onReset }: { submitted: SubmittedOr
             className="flex items-center gap-1.5 px-4 rounded-full text-xs font-bold shrink-0 transition hover:opacity-90"
             style={{ minHeight: 44, background: `linear-gradient(135deg, ${c.primary}, ${c.gold})`, color: c.onAccent }}
             {...focusRing(`${c.gold}55`)}>
-            {copied ? <Check className="w-3.5 h-3.5" aria-hidden="true" /> : <Copy className="w-3.5 h-3.5" aria-hidden="true" />} {copied ? 'Copied' : 'Copy All'}
+            {copied ? <Check className="w-3.5 h-3.5" aria-hidden="true" /> : <Copy className="w-3.5 h-3.5" aria-hidden="true" />} {copied ? 'Copied' : matterCopy.state === 'failed' ? 'Not copied' : 'Copy All'}
           </button>
         </div>
         {showExport && (
@@ -5432,14 +5549,26 @@ function StatusBadge({ s, c }: { s: string; c: Palette }) {
 
 function OrderModal({ order, onClose, c, dark, onStatusChange, onDelete }: { order: SubmittedOrder; onClose: () => void; c: Palette; dark: boolean; onStatusChange: (s: SubmittedOrder['status']) => void; onDelete: () => void }) {
   const corel = generateCorelText(order.form);
-  const [copied, setCopied] = useState(false);
+  const matterCopy = useCopy(1500);
+  const copied = matterCopy.state === 'copied';
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [downloadingPng, setDownloadingPng] = useState(false);
-  const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [shareHint, setShareHint] = useState<'shared' | 'downloaded' | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
+  const matterRef = useRef<HTMLPreElement>(null);
   const reduce = usePrefersReducedMotion();
-  const copy = () => { navigator.clipboard?.writeText(corel); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+  const copy = () => matterCopy.copy(corel);
+  // A refused copy: select the whole matter on screen, so the phone's own
+  // Copy (in the menu that appears) takes all of it, never part of a name.
+  useEffect(() => {
+    const el = matterRef.current;
+    if (matterCopy.state !== 'failed' || !el) return;
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    el.scrollIntoView({ block: 'nearest' });
+  }, [matterCopy.state]);
   // The size the customer chose — what the preview, PNG and PDF are fitted to.
   const cardSize = order.form.design.cardSize;
   // wa.me can only pre-fill text, never an image — so the full matter goes as text;
@@ -5448,7 +5577,8 @@ function OrderModal({ order, onClose, c, dark, onStatusChange, onDelete }: { ord
   // mailto: bodies are silently truncated past ~2000 chars by many mail clients,
   // so the matter only travels inline when it fits; otherwise the draft carries
   // the order details and the matter goes across by clipboard.
-  const fileBase = `${order.orderId}-${order.couple.replace(/\s+/g, '-')}`;
+  // The couple is free text ("Aditi & Rohan"), so strip what file systems reject.
+  const fileBase = fileSafe(`${order.orderId} ${order.couple}`);
   // Opening an order is mostly to read it, so the card is built only when the
   // first tap on email asks for it; the second tap sends (see usePreparedCardFiles).
   const prepared = usePreparedCardFiles(previewRef, fileBase, false);
@@ -5462,28 +5592,12 @@ function OrderModal({ order, onClose, c, dark, onStatusChange, onDelete }: { ord
       fallback: `${heading}\n\nThe full matter was too long for one draft. Copy it with "Copy matter for CorelDRAW" and paste it here.`,
     }, setShareHint);
   };
-  const downloadPng = async () => {
-    if (!previewRef.current || downloadingPng) return;
-    setDownloadingPng(true);
-    try {
-      // One PNG per page, each at the card's proportions (see Success).
-      downloadFiles(await cardFiles(previewRef.current, fileBase, { pdf: false }));
-    } finally {
-      setDownloadingPng(false);
-    }
-  };
+  // One PNG per page, each at the card's proportions (see Success).
+  const png = useSaveFiles(async () => (previewRef.current ? cardFiles(previewRef.current, fileBase, { pdf: false }) : []));
   // Each card page becomes its own PDF page at the card's real trim size. This
   // used to walk previewRef's children, which is one wrapper holding every
   // page — the same bug that once gave the shared PDF a single tall page.
-  const downloadPdf = async () => {
-    if (!previewRef.current || downloadingPdf) return;
-    setDownloadingPdf(true);
-    try {
-      downloadFiles(await cardFiles(previewRef.current, fileBase, { png: false }));
-    } finally {
-      setDownloadingPdf(false);
-    }
-  };
+  const pdf = useSaveFiles(async () => (previewRef.current ? cardFiles(previewRef.current, fileBase, { png: false }) : []));
 
   // Escape closes the modal; the page behind it must not scroll while it's open.
   useEffect(() => {
@@ -5618,7 +5732,12 @@ function OrderModal({ order, onClose, c, dark, onStatusChange, onDelete }: { ord
                 {copied ? <Check className="w-5 h-5" strokeWidth={3} aria-hidden="true" /> : <Copy className="w-[18px] h-[18px]" aria-hidden="true" />}
                 {copied ? 'Copied to clipboard' : 'Copy matter for CorelDRAW'}
               </button>
-              <pre
+              {matterCopy.state === 'failed' && (
+                <div className="text-xs mt-2 font-semibold leading-snug" style={{ color: '#DC2626' }} role="alert">
+                  This device didn’t allow the copy. The whole matter is selected below: tap Copy in the menu, or press and hold it and choose Select All, then Copy.
+                </div>
+              )}
+              <pre ref={matterRef}
                 className="text-[10px] whitespace-pre-wrap font-mono p-3.5 rounded-xl border mt-3 max-h-[300px] overflow-y-auto leading-relaxed"
                 style={{ borderColor: c.border, background: codeBg, color: c.text }}
               >{corel}</pre>
@@ -5628,19 +5747,24 @@ function OrderModal({ order, onClose, c, dark, onStatusChange, onDelete }: { ord
             <div className="rounded-2xl border p-4 mt-4" style={panelStyle}>
               <div className="text-[10px] font-bold uppercase tracking-[0.28em] mb-3" style={{ color: c.subtext }}>Export &amp; share</div>
               <div className="grid grid-cols-2 gap-2.5">
-                <button onClick={downloadPng} disabled={downloadingPng}
+                <button onClick={png.run} disabled={png.state === 'busy'}
                   className="flex items-center justify-center gap-2 rounded-2xl text-sm font-bold border transition hover:opacity-85 disabled:opacity-60 disabled:cursor-wait"
                   style={{ minHeight: 50, borderColor: c.border, color: c.text, background: dark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.7)' }}
                   {...focusRing(`${c.gold}55`)}>
-                  {downloadingPng ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <Download className="w-4 h-4" aria-hidden="true" />} {downloadingPng ? 'Preparing…' : 'PNG Image'}
+                  <SaveLabel state={png.state} icon={Download} text="PNG Image" />
                 </button>
-                <button onClick={downloadPdf} disabled={downloadingPdf}
+                <button onClick={pdf.run} disabled={pdf.state === 'busy'}
                   className="flex items-center justify-center gap-2 rounded-2xl text-sm font-bold border transition hover:opacity-85 disabled:opacity-60 disabled:cursor-wait"
                   style={{ minHeight: 50, borderColor: c.border, color: c.text, background: dark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.7)' }}
                   {...focusRing(`${c.gold}55`)}>
-                  {downloadingPdf ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <FileText className="w-4 h-4" aria-hidden="true" />} {downloadingPdf ? 'Preparing…' : 'PDF File'}
+                  <SaveLabel state={pdf.state} icon={FileText} text="PDF File" />
                 </button>
               </div>
+              {isIOS() && (
+                <div className="text-[11px] mt-2 leading-snug font-medium" style={{ color: c.subtext }}>
+                  On iPhone and iPad these open the share menu: choose <strong style={{ color: c.text }}>Save to Files</strong> (or Save Images for the PNG pages), or send straight to Word, WhatsApp or Mail.
+                </div>
+              )}
               <DocxDownloadButton form={order.form} base={fileBase} order={order} c={c}
                 className="w-full mt-2.5 flex items-center justify-center gap-2 rounded-2xl text-sm font-bold border transition hover:opacity-85 disabled:opacity-60 disabled:cursor-wait"
                 style={{ minHeight: 50, borderColor: c.border, color: c.text, background: dark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.7)' }} />
